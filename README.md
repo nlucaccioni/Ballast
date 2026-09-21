@@ -7,15 +7,28 @@ across apps from the same provider.
 
 Built with Electron.
 
-## Running locally
+## Download
+
+Grab the latest installer for your platform from the
+[Releases page](https://github.com/nlucaccioni/ballast/releases/latest):
+
+- Windows: the `.exe` installer
+- macOS: the `.dmg`
+
+Ballast checks for updates automatically after launch (and on demand via the
+menu behind the sidebar's hamburger button).
+
+## Running from source
 
 ```
 npm install
 npm start
 ```
 
-No packaging/build step yet — this runs directly against the Electron
-binary in `node_modules`.
+This runs directly against the Electron binary in `node_modules`, with no
+packaging step — useful for development. To build an installer yourself,
+see `npm run dist` (Windows) / `npm run dist:mac` (macOS), both via
+`electron-builder`.
 
 ## Adding an app
 
