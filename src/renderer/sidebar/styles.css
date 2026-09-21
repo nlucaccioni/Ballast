@@ -3,7 +3,9 @@
 
 :root {
   --titlebar-height: 36px; /* must match TITLEBAR_HEIGHT in main/view-manager.js */
-  --sidebar-width: 46px; /* must match SIDEBAR_WIDTH in main/view-manager.js */
+  --sidebar-width: 54px; /* must match SIDEBAR_WIDTH in main/view-manager.js */
+  --corner-box-size: 8px; /* must match CORNER_BOX_SIZE in main/view-manager.js */
+  --border-width: 1px; /* must match BORDER_WIDTH in main/view-manager.js */
 }
 
 body {
@@ -87,6 +89,31 @@ body {
   cursor: default;
 }
 
+/* Sit exactly in the 1px gap main/view-manager.js insets the webview's
+   bounds by, reading as a border around a view CSS can't otherwise style.
+   Offset by --corner-box-size so they start right where the corner mask's
+   own border-ring arc (corner-mask/index.html) ends, instead of cutting
+   straight through the rounded corner at a hard angle. */
+#webview-border-top {
+  position: fixed;
+  top: var(--titlebar-height);
+  left: calc(var(--sidebar-width) + var(--corner-box-size));
+  right: 0;
+  height: var(--border-width);
+  background: #303030;
+  pointer-events: none;
+}
+
+#webview-border-left {
+  position: fixed;
+  top: calc(var(--titlebar-height) + var(--corner-box-size));
+  left: var(--sidebar-width);
+  bottom: 0;
+  width: var(--border-width);
+  background: #303030;
+  pointer-events: none;
+}
+
 #sidebar {
   position: fixed;
   top: var(--titlebar-height);
@@ -96,8 +123,11 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding-top: 4px;
+  /* Matches the side margin around each 36px-wide .app-group within this
+     50px sidebar — (50 - 36) / 2 = 7px — so spacing is consistent on all
+     sides of every group container, and the first one's top edge lines up
+     with the WebContentsView's top edge (no padding-top here). */
+  gap: 7px;
   box-sizing: border-box;
   background: #1e1e1e;
 }
@@ -165,7 +195,7 @@ body {
   position: fixed;
   height: 2px;
   border-radius: 1px;
-  background: #4a90e2;
+  background: #d0d0d0;
   pointer-events: none;
   z-index: 10;
 }
@@ -173,7 +203,7 @@ body {
 /* Drag-to-group still highlights the target directly — it's a "drop onto
    this" gesture, not a "drop between" one. */
 .drop-merge {
-  outline: 2px solid #4a90e2;
+  outline: 2px solid #d0d0d0;
   outline-offset: 1px;
 }
 
@@ -182,31 +212,28 @@ body {
    identically either way; nothing here overrides their size. */
 .app-group {
   position: relative;
-  width: 36px;
+  /* 32px button + 3px padding each side + 1px border each side = 40px.
+     The previous 38px fit the button with exactly zero slack (38 - 2×1
+     border - 2×2 padding = 32, dead even), so any sub-pixel rounding
+     difference between monitors/scale factors tipped it visibly to one
+     side. The extra 1px of padding here is deliberate breathing room, and
+     align-items: center (was unset, defaulting to a one-sided flex-start
+     fit) makes the browser split any leftover rounding evenly instead of
+     dumping it all on one edge. */
+  width: 40px;
   box-sizing: border-box;
-  padding: 2px;
+  padding: 3px;
+  border: 1px solid #404040;
   border-radius: 8px;
   background: #2a2a2a;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 2px;
 }
 
 .app-group.dragging {
   opacity: 0.4;
-}
-
-#app-tooltip {
-  position: fixed;
-  z-index: 1000;
-  transform: translateY(-50%);
-  background: #2a2a2a;
-  color: #eee;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  white-space: nowrap;
-  pointer-events: none;
 }
 
 #add-app-button {
@@ -227,56 +254,56 @@ body {
   height: 14px;
 }
 
+/* Fills the browser view area itself (same bounds as the webview — see
+   main/view-manager.js's layout()) rather than the whole window, since the
+   active view is hidden behind this while it's open. No cancel/add
+   buttons: Enter submits, Escape or clicking the empty area backs out. */
 .add-app-overlay {
   position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  top: calc(var(--titlebar-height) + var(--border-width));
+  left: calc(var(--sidebar-width) + var(--border-width));
+  right: 0;
+  bottom: 0;
+  background: #1e1e1e;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .add-app-form {
+  width: 100%;
+  max-width: 560px;
+  padding: 0 24px;
+  box-sizing: border-box;
+}
+
+.add-app-search {
+  display: flex;
+  align-items: center;
+  gap: 14px;
   background: #2a2a2a;
-  padding: 16px;
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 260px;
-  color: #eee;
-  font-size: 13px;
+  border: 1px solid #404040;
+  border-radius: 14px;
+  padding: 16px 22px;
 }
 
-.add-app-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.add-app-search .icon {
+  width: 22px;
+  height: 22px;
+  color: #888;
+  flex-shrink: 0;
 }
 
-.add-app-form input {
-  padding: 6px 8px;
-  border-radius: 4px;
-  border: 1px solid #555;
-  background: #1e1e1e;
-  color: #eee;
-}
-
-.add-app-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.add-app-actions button {
-  padding: 6px 12px;
-  border-radius: 4px;
+.add-app-search input {
+  flex: 1;
+  min-width: 0;
   border: none;
-  cursor: pointer;
+  background: transparent;
+  outline: none;
+  color: #eee;
+  font-size: 18px;
 }
 
-.add-app-actions button[type='submit'] {
-  background: #4a90e2;
-  color: #fff;
+.add-app-search input::placeholder {
+  color: #777;
 }

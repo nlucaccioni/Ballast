@@ -168,6 +168,22 @@ function updateAppUrl(appId, url) {
   setApps(getApps().map((app) => (app.id === appId ? { ...app, url, partition: partitionForUrl(url) } : app)));
 }
 
+// Persists the last-known favicon/title so the sidebar can show it
+// immediately on next launch instead of a fallback letter while each app's
+// page reloads over the network (see ViewManager.updateMeta).
+function updateAppMeta(appId, partial) {
+  setApps(getApps().map((app) => (app.id === appId ? { ...app, ...partial } : app)));
+}
+
+// Where a pinned app reopens to on next launch — kept separate from `url`
+// (the pinned "home"/identity URL that partitioning and the search-
+// graduation check key off) so that ordinary navigation, like switching
+// which Google account slot (mail.google.com/mail/u/0/ vs u/1/) a Gmail
+// app is on, doesn't get treated as re-pinning the app somewhere new.
+function updateAppLastUrl(appId, lastUrl) {
+  setApps(getApps().map((app) => (app.id === appId ? { ...app, lastUrl } : app)));
+}
+
 // --- Sidebar order: the single source of truth for top-level sidebar item
 // order (apps.json order / groups[].appIds order no longer drive rendering
 // order — this interleaves standalone apps and group containers). Each
@@ -250,35 +266,65 @@ function detachFromGroup(appId) {
   }
 }
 
-// Drag appIdA onto standalone appIdB: merges both into a new group,
-// replacing appIdB's sidebar slot.
-function createGroupFromApps(appIdA, appIdB) {
-  if (appIdA === appIdB) return null;
-  detachFromGroup(appIdA);
+// Drag sourceAppId onto standalone targetAppId: merges both into a new
+// group, replacing targetAppId's sidebar slot. `before` places sourceAppId
+// above/below targetAppId in the new group, matching whichever half of
+// targetAppId's icon the drop landed on.
+function createGroupFromApps(sourceAppId, targetAppId, before = false) {
+  if (sourceAppId === targetAppId) return null;
+  detachFromGroup(sourceAppId);
 
-  const newGroup = { id: generateGroupId(), label: '', appIds: [appIdA, appIdB] };
+  const appIds = before ? [sourceAppId, targetAppId] : [targetAppId, sourceAppId];
+  const newGroup = { id: generateGroupId(), label: '', appIds };
   setGroups([...getGroups(), newGroup]);
 
-  const order = getSidebarOrder().filter((item) => !(item.type === 'app' && (item.id === appIdA || item.id === appIdB)));
-  const targetIndex = getSidebarOrder().findIndex((item) => item.type === 'app' && item.id === appIdB);
+  const order = getSidebarOrder().filter(
+    (item) => !(item.type === 'app' && (item.id === sourceAppId || item.id === targetAppId))
+  );
+  const targetIndex = getSidebarOrder().findIndex((item) => item.type === 'app' && item.id === targetAppId);
   const insertAt = Math.min(targetIndex === -1 ? order.length : targetIndex, order.length);
   order.splice(insertAt, 0, { type: 'group', id: newGroup.id });
   setSidebarOrder(order);
   return newGroup;
 }
 
-// Drag standalone appId onto an existing group container.
-function addAppToGroup(groupId, appId) {
-  const groups = getGroups();
-  const group = groups.find((g) => g.id === groupId);
+// Drag appId (standalone, or a member of some other group) onto an
+// existing group. Without a referenceAppId it's appended at the end;
+// otherwise it's inserted just before/after that member, matching
+// whichever half of the member's icon the drop landed on.
+function addAppToGroup(groupId, appId, referenceAppId = null, before = false) {
+  const group = getGroups().find((g) => g.id === groupId);
   if (!group || group.appIds.includes(appId)) return;
   detachFromGroup(appId);
-  setGroups(getGroups().map((g) => (g.id === groupId ? { ...g, appIds: [...g.appIds, appId] } : g)));
+
+  const current = getGroups().find((g) => g.id === groupId);
+  const appIds = [...current.appIds];
+  const refIndex = referenceAppId ? appIds.indexOf(referenceAppId) : -1;
+  const insertAt = refIndex === -1 ? appIds.length : before ? refIndex : refIndex + 1;
+  appIds.splice(insertAt, 0, appId);
+
+  setGroups(getGroups().map((g) => (g.id === groupId ? { ...g, appIds } : g)));
   setSidebarOrder(getSidebarOrder().filter((item) => !(item.type === 'app' && item.id === appId)));
 }
 
 function reorderGroupMembers(groupId, appIds) {
   setGroups(getGroups().map((g) => (g.id === groupId ? { ...g, appIds } : g)));
+}
+
+// General top-level reordering: positions itemType/itemId just before/after
+// referenceType/referenceId in the sidebar. For an app that's currently a
+// group member, this also extracts it from that group first — dragging a
+// member out to become its own icon (or into a different group's own
+// member-relative slot, via addAppToGroup instead) is the same underlying
+// "detach, then place" operation as reordering an already-standalone app.
+function moveSidebarItem(itemType, itemId, referenceType, referenceId, before) {
+  if (itemType === 'app') detachFromGroup(itemId);
+
+  const order = getSidebarOrder().filter((item) => !(item.type === itemType && item.id === itemId));
+  const idx = order.findIndex((item) => item.type === referenceType && item.id === referenceId);
+  const insertAt = idx === -1 ? order.length : before ? idx : idx + 1;
+  order.splice(insertAt, 0, { type: itemType, id: itemId });
+  setSidebarOrder(order);
 }
 
 // Right-click "Remove from group": appId becomes a standalone icon again.
@@ -321,6 +367,8 @@ module.exports = {
   setGroups,
   addApp,
   updateAppUrl,
+  updateAppMeta,
+  updateAppLastUrl,
   removeApp,
   getSidebarOrder,
   setSidebarOrder,
@@ -329,5 +377,6 @@ module.exports = {
   addAppToGroup,
   removeAppFromGroup,
   reorderGroupMembers,
+  moveSidebarItem,
   SEARCH_ENGINE_ROOT_DOMAINS,
 };

@@ -7,9 +7,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   switchApp: (appId) => ipcRenderer.invoke('app:switch', appId),
   addApp: (payload) => ipcRenderer.invoke('app:add', payload),
   removeApp: (appId) => ipcRenderer.invoke('app:remove', appId),
-  reorderSidebar: (order) => ipcRenderer.invoke('app:reorder', order),
-  createGroup: (sourceAppId, targetAppId) => ipcRenderer.invoke('app:create-group', { sourceAppId, targetAppId }),
-  mergeIntoGroup: (groupId, appId) => ipcRenderer.invoke('app:merge-into-group', { groupId, appId }),
+  moveSidebarItem: (itemType, itemId, referenceType, referenceId, before) =>
+    ipcRenderer.invoke('app:move-sidebar-item', { itemType, itemId, referenceType, referenceId, before }),
+  createGroup: (sourceAppId, targetAppId, before) =>
+    ipcRenderer.invoke('app:create-group', { sourceAppId, targetAppId, before }),
+  mergeIntoGroup: (groupId, appId, referenceAppId, before) =>
+    ipcRenderer.invoke('app:merge-into-group', { groupId, appId, referenceAppId, before }),
   reorderGroupMembers: (groupId, appIds) => ipcRenderer.invoke('app:reorder-group-members', { groupId, appIds }),
   ungroupApp: (appId) => ipcRenderer.invoke('app:ungroup', appId),
   onContextMenuUngroup: (callback) => {
@@ -19,6 +22,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   hideActiveView: () => ipcRenderer.send('view:hide-active'),
   showActiveView: () => ipcRenderer.send('view:show-active'),
+  showTooltip: (text, x, y) => ipcRenderer.send('view:show-tooltip', { text, x, y }),
+  hideTooltip: () => ipcRenderer.send('view:hide-tooltip'),
   openAppMenu: (position) => ipcRenderer.send('app:open-menu', position),
   openAppContextMenu: (appId, position, inGroup) =>
     ipcRenderer.send('app:open-context-menu', { appId, x: position.x, y: position.y, inGroup }),

@@ -4,6 +4,16 @@ const ViewManager = require('./view-manager');
 const { registerIpcHandlers } = require('./ipc');
 const configStore = require('./config-store');
 
+// Google's login page (and others) proactively probe for available
+// passkeys the moment it loads, via WebAuthn's "conditional UI" — in a
+// browser that fully supports it this is silent (just an autofill hint),
+// but it seems to escalate straight to the native Windows Security passkey
+// dialog here, unprompted, before the user's done anything. Must be set
+// before app is ready. We don't support in-app passkey login anyway, so
+// just disable the proactive check; an explicit "sign in with a passkey"
+// button (a user action, not page-load) is unaffected.
+app.commandLine.appendSwitch('disable-features', 'WebAuthenticationConditionalMediation');
+
 let mainWindow;
 
 // Placeholder menu contents — just enough to reload/inspect/quit while

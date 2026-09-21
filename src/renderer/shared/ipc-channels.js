@@ -3,9 +3,9 @@ module.exports = {
   GET_APPS: 'app:list',
   ADD_APP: 'app:add',
   REMOVE_APP: 'app:remove',
-  REORDER_APPS: 'app:reorder', // payload is now the full sidebar order: {type: 'app'|'group', id}[]
-  CREATE_GROUP: 'app:create-group', // drag app onto app -> merge into a new group
-  MERGE_INTO_GROUP: 'app:merge-into-group', // drag app onto an existing group
+  MOVE_SIDEBAR_ITEM: 'app:move-sidebar-item', // top-level reorder, extracting from a group first if needed
+  CREATE_GROUP: 'app:create-group', // drag app onto app -> merge into a new group, at a given position
+  MERGE_INTO_GROUP: 'app:merge-into-group', // drag app onto/into an existing group, at a given position
   REORDER_GROUP_MEMBERS: 'app:reorder-group-members', // drag one group member onto another in the same group
   UNGROUP_APP: 'app:ungroup',
   APP_CONTEXT_MENU_UNGROUP: 'app:context-menu-ungroup', // main -> renderer push
@@ -13,6 +13,8 @@ module.exports = {
   REPORT_UNREAD: 'app:report-unread', // webview-preload -> main
   HIDE_ACTIVE_VIEW: 'view:hide-active', // sidebar -> main, for full-window dialogs
   SHOW_ACTIVE_VIEW: 'view:show-active',
+  SHOW_TOOLTIP: 'view:show-tooltip', // sidebar -> main, positions/shows the tooltip overlay
+  HIDE_TOOLTIP: 'view:hide-tooltip',
   APP_META_CHANGED: 'app:meta-changed', // main -> renderer push (favicon/title)
   OPEN_APP_MENU: 'app:open-menu', // sidebar hamburger button -> main
   OPEN_APP_CONTEXT_MENU: 'app:open-context-menu', // right-click on a favicon -> main

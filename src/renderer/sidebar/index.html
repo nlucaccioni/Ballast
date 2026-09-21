@@ -34,6 +34,12 @@
       </div>
     </div>
     <div id="sidebar"></div>
+    <!-- The webview itself is a native WebContentsView, not stylable with
+         CSS — its bounds are inset 1px on the top/left (see
+         main/view-manager.js) and these two lines sit in that gap to read
+         as a border around it. -->
+    <div id="webview-border-top"></div>
+    <div id="webview-border-left"></div>
     <script src="index.js"></script>
   </body>
 </html>

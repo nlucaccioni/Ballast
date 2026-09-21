@@ -43,18 +43,18 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
     return { removedId: appId, newActiveId };
   });
 
-  ipcMain.handle(channels.REORDER_APPS, (event, order) => {
-    configStore.setSidebarOrder(order);
+  ipcMain.handle(channels.MOVE_SIDEBAR_ITEM, (event, { itemType, itemId, referenceType, referenceId, before }) => {
+    configStore.moveSidebarItem(itemType, itemId, referenceType, referenceId, before);
     return {};
   });
 
-  ipcMain.handle(channels.CREATE_GROUP, (event, { sourceAppId, targetAppId }) => {
-    const group = configStore.createGroupFromApps(sourceAppId, targetAppId);
+  ipcMain.handle(channels.CREATE_GROUP, (event, { sourceAppId, targetAppId, before }) => {
+    const group = configStore.createGroupFromApps(sourceAppId, targetAppId, before);
     return { group };
   });
 
-  ipcMain.handle(channels.MERGE_INTO_GROUP, (event, { groupId, appId }) => {
-    configStore.addAppToGroup(groupId, appId);
+  ipcMain.handle(channels.MERGE_INTO_GROUP, (event, { groupId, appId, referenceAppId, before }) => {
+    configStore.addAppToGroup(groupId, appId, referenceAppId, before);
     return {};
   });
 
@@ -70,6 +70,9 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
 
   ipcMain.on(channels.HIDE_ACTIVE_VIEW, () => viewManager.hideActive());
   ipcMain.on(channels.SHOW_ACTIVE_VIEW, () => viewManager.showActive());
+
+  ipcMain.on(channels.SHOW_TOOLTIP, (event, { text, x, y }) => viewManager.showTooltip(text, x, y));
+  ipcMain.on(channels.HIDE_TOOLTIP, () => viewManager.hideTooltip());
 
   ipcMain.on(channels.OPEN_APP_MENU, (event, position) => {
     appMenu.popup({ window: mainWindow, x: position?.x, y: position?.y });

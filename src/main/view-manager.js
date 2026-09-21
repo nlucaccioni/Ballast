@@ -6,16 +6,40 @@ const { watchTitleCount } = require('./unread-tracker');
 const configStore = require('./config-store');
 const { APP_META_CHANGED, NAV_STATE_CHANGED, UNREAD_CHANGED } = require('../renderer/shared/ipc-channels');
 
-const SIDEBAR_WIDTH = 46; // adjust to final design; must match --sidebar-width in sidebar/styles.css
+const SIDEBAR_WIDTH = 54; // adjust to final design; must match --sidebar-width in sidebar/styles.css
 const TITLEBAR_HEIGHT = 36; // must match --titlebar-height in sidebar/styles.css
 // Matches the sidebar app-button's border-radius (styles.css .app-button);
 // adjust the value here and in corner-mask/index.html together if it looks off.
 const CORNER_RADIUS = 7;
+// The webview itself can't take a CSS border (it's a native view), so its
+// bounds are inset by this much on the top/left and #webview-border-top/
+// -left (styles.css) draw a line in the resulting gap.
+const BORDER_WIDTH = 1;
+// The corner mask's box needs to be this much bigger than CORNER_RADIUS
+// alone so its border ring's outer edge lands exactly at the real radius —
+// see corner-mask/index.html. Must match --corner-box-size in styles.css.
+const CORNER_BOX_SIZE = CORNER_RADIUS + BORDER_WIDTH;
+// Generous fixed size for the tooltip overlay box — the tooltip pill inside
+// it is left-aligned and sized to its own text (with ellipsis if it doesn't
+// fit), so this only needs to be large enough for realistic titles.
+const TOOLTIP_WIDTH = 260;
+const TOOLTIP_HEIGHT = 24;
 
 // Hostnames that look like an identity provider (accounts.google.com,
 // login.microsoftonline.com, ...) even when they're on a different root
 // domain than the app itself — covers third-party/federated SSO.
 const AUTH_SUBDOMAIN_PATTERN = /^(accounts|login|signin|auth|sso|id)\./i;
+
+// Electron's default UA appends "Electron/x.y.z", which is exactly what
+// sites like WhatsApp Web and Teams sniff for to show an "unsupported
+// browser, please update" nag — regardless of how current the actual
+// Chromium underneath is (see spec section 10). Presenting as plain desktop
+// Chrome, at the real Chromium version this build ships, avoids that
+// without actually lying about the rendering engine. Windows-only for now;
+// revisit the platform string if/when macOS support is added.
+const DESKTOP_USER_AGENT =
+  `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ` +
+  `Chrome/${process.versions.chrome} Safari/537.36`;
 
 class ViewManager {
   constructor(win) {
@@ -42,17 +66,50 @@ class ViewManager {
     this.cornerMask.setBounds({
       x: SIDEBAR_WIDTH,
       y: TITLEBAR_HEIGHT,
-      width: CORNER_RADIUS,
-      height: CORNER_RADIUS,
+      width: CORNER_BOX_SIZE,
+      height: CORNER_BOX_SIZE,
     });
     this.win.contentView.addChildView(this.cornerMask);
+
+    // Same problem, same fix, for tooltips: a plain HTML tooltip in the
+    // sidebar's own page renders *underneath* the active app view wherever
+    // the two overlap, which is most of a tooltip's width once the sidebar
+    // is as narrow as it is. This overlay sits above the app view instead.
+    this.tooltipOverlay = new WebContentsView({
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'preload', 'tooltip-preload.js'),
+        contextIsolation: true,
+        sandbox: true,
+      },
+    });
+    this.tooltipOverlay.setBackgroundColor('#00000000');
+    this.tooltipOverlay.webContents.loadFile(
+      path.join(__dirname, '..', 'renderer', 'tooltip-overlay', 'index.html')
+    );
+    this.win.contentView.addChildView(this.tooltipOverlay);
   }
 
   // Re-adding an existing child view moves it to the top of the z-order, so
-  // call this after any addChildView() that might otherwise bury the mask
+  // call this after any addChildView() that might otherwise bury an overlay
   // under the app view it just attached.
-  raiseCornerMask() {
+  raiseOverlays() {
     this.win.contentView.addChildView(this.cornerMask);
+    this.win.contentView.addChildView(this.tooltipOverlay);
+  }
+
+  showTooltip(text, x, y) {
+    this.tooltipOverlay.setBounds({
+      x: Math.round(x),
+      y: Math.round(y - TOOLTIP_HEIGHT / 2),
+      width: TOOLTIP_WIDTH,
+      height: TOOLTIP_HEIGHT,
+    });
+    this.tooltipOverlay.webContents.send('tooltip:update', { text, visible: true });
+    this.raiseOverlays();
+  }
+
+  hideTooltip() {
+    this.tooltipOverlay.webContents.send('tooltip:update', { visible: false });
   }
 
   getOrCreate(app) {
@@ -66,7 +123,11 @@ class ViewManager {
         sandbox: true,
       },
     });
-    view.webContents.loadURL(app.url);
+    view.webContents.setUserAgent(DESKTOP_USER_AGENT);
+    // Reopens wherever this app was last left (e.g. which Google account
+    // slot a Gmail app was on), falling back to the pinned URL the first
+    // time an app is ever opened.
+    view.webContents.loadURL(app.lastUrl || app.url);
 
     // window.open() (Google's account chooser, SSO redirects, "open in new
     // tab" links, ...) would otherwise spawn an unmanaged native
@@ -108,6 +169,7 @@ class ViewManager {
     view.webContents.on('did-navigate', (event, url) => {
       this.emitNavState(app.id);
       this.maybeGraduateFromSearch(app.id, url);
+      configStore.updateAppLastUrl(app.id, url);
     });
     view.webContents.on('did-navigate-in-page', () => this.emitNavState(app.id));
 
@@ -183,6 +245,9 @@ class ViewManager {
     const next = { ...current, ...partial };
     this.meta.set(appId, next);
     this.win.webContents.send(APP_META_CHANGED, { appId, ...next });
+    // Persisted so next launch can show it immediately instead of a
+    // fallback letter while this app's page reloads over the network.
+    configStore.updateAppMeta(appId, partial);
   }
 
   getMeta(appId) {
@@ -211,7 +276,7 @@ class ViewManager {
       this.win.contentView.addChildView(view);
     }
     this.layout(view);
-    this.raiseCornerMask();
+    this.raiseOverlays();
     this.activeId = appId;
     this.emitNavState(appId);
   }
@@ -220,10 +285,10 @@ class ViewManager {
     if (!view) return;
     const [width, height] = this.win.getContentSize();
     view.setBounds({
-      x: SIDEBAR_WIDTH,
-      y: TITLEBAR_HEIGHT,
-      width: width - SIDEBAR_WIDTH,
-      height: height - TITLEBAR_HEIGHT,
+      x: SIDEBAR_WIDTH + BORDER_WIDTH,
+      y: TITLEBAR_HEIGHT + BORDER_WIDTH,
+      width: width - SIDEBAR_WIDTH - BORDER_WIDTH,
+      height: height - TITLEBAR_HEIGHT - BORDER_WIDTH,
     });
   }
 
@@ -239,7 +304,7 @@ class ViewManager {
     const view = this.views.get(this.activeId);
     this.win.contentView.addChildView(view);
     this.layout(view);
-    this.raiseCornerMask();
+    this.raiseOverlays();
   }
 
   // WebContentsView has no explicit destroy() — dropping the last reference

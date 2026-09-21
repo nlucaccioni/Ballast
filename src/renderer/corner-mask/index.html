@@ -11,14 +11,25 @@
         height: 100%;
         background: transparent;
       }
-      /* Concave-corner trick: pixels within `radius` of the bottom-right
-         corner stay transparent (revealing the real content view behind
-         this overlay); everything beyond that arc is painted chrome-dark,
-         masking the content view's actual hard-cornered edge. */
+      /* Concave-corner trick, now with a border ring: pixels within
+         (radius - borderWidth) of the bottom-right corner stay transparent
+         (revealing the real content view behind this overlay); a thin ring
+         out to `radius` is painted the border color, so the straight
+         #webview-border-top/-left lines (styles.css) have something to
+         visually continue into instead of meeting at a hard angle; beyond
+         that is chrome-dark, masking the content view's actual
+         hard-cornered edge. This box is sized radius + borderWidth (8px)
+         so the ring's outer edge lands exactly at the real radius. */
       .mask {
         width: 100%;
         height: 100%;
-        background: radial-gradient(circle at bottom right, transparent 7px, #1e1e1e 7px);
+        background: radial-gradient(
+          circle at bottom right,
+          transparent 6px,
+          #303030 6px,
+          #303030 7px,
+          #1e1e1e 7px
+        );
       }
     </style>
   </head>

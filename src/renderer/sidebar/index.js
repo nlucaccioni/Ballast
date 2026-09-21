@@ -72,28 +72,24 @@ function faviconFallbackText(app) {
   }
 }
 
-// --- Custom tooltip (native `title` delay isn't tunable, so we roll our own) ---
+// --- Custom tooltip (native `title` delay isn't tunable, so we roll our
+// own) — rendered via a native overlay view (see main/view-manager.js's
+// showTooltip), not a plain HTML element in this page: a plain element
+// would render *underneath* the active app view wherever the two overlap,
+// which is most of a tooltip's width now that the sidebar is this narrow.
 
-const TOOLTIP_DELAY_MS = 500;
-const tooltip = document.createElement('div');
-tooltip.id = 'app-tooltip';
-tooltip.hidden = true;
-document.body.appendChild(tooltip);
-
+const TOOLTIP_DELAY_MS = 250;
 let tooltipTimer = null;
 
 function showTooltip(button, text) {
   if (!text) return;
-  tooltip.textContent = text;
-  tooltip.hidden = false;
   const rect = button.getBoundingClientRect();
-  tooltip.style.left = `${rect.right + 8}px`;
-  tooltip.style.top = `${rect.top + rect.height / 2}px`;
+  window.electronAPI.showTooltip(text, rect.right + 8, rect.top + rect.height / 2);
 }
 
 function hideTooltip() {
   clearTimeout(tooltipTimer);
-  tooltip.hidden = true;
+  window.electronAPI.hideTooltip();
 }
 
 function attachTooltip(button, getText) {
@@ -144,7 +140,7 @@ async function removeApp(appId) {
 // see buildContainer. A second, smaller "grouped" button class used to
 // exist and is exactly why badges/favicons shrank when an app got grouped;
 // one shared path means there's nothing left to diverge.
-function buildAppButton(app) {
+function buildAppButton(app, containerItem) {
   const button = document.createElement('button');
   button.className = 'app-button';
   button.dataset.appId = app.id;
@@ -168,6 +164,7 @@ function buildAppButton(app) {
       isAppInGroup(app.id)
     );
   });
+  attachButtonDragHandlers(button, app.id, containerItem);
   buttonsByAppId.set(app.id, button);
   return button;
 }
@@ -186,36 +183,44 @@ function buildContainer(item) {
 
   appIds.forEach((appId) => {
     const app = appsById.get(appId);
-    if (!app) return;
-    const button = buildAppButton(app);
-    if (group) attachGroupMemberDragHandlers(button, group, appId);
-    container.appendChild(button);
+    if (app) container.appendChild(buildAppButton(app, item));
   });
 
-  attachDragHandlers(container, item);
+  // A lone app's "container" is just its one button — dragging that button
+  // already sets draggedItem to {type:'app', id}, which is everything the
+  // top-level reorder/merge logic below needs, so the wrapper div itself
+  // doesn't need to be its own drag source. A real group's whole container
+  // *is* a distinct drag source (move the group as a unit, vs. dragging one
+  // member button out of it), so only groups get this.
+  if (item.type === 'group') attachContainerDragHandlers(container, item);
   return container;
 }
 
-// --- Drag-and-drop: reorder (drop near an edge) vs. merge into a group
-// (drop in the middle of another standalone app or an existing group).
-// Reordering shows a horizontal bar *between* items rather than a highlight
-// on the item itself. Merging still highlights the target directly, since
-// that's a "drop onto this" gesture.
+// --- Drag-and-drop ---
 //
-// Top-level hit-testing (which item, which zone) is delegated to #sidebar
-// itself rather than each item owning its own dragover/drop: with per-item
-// listeners, drifting off an item's exact bounds mid-drag (a gap, past the
-// last item, near the very top) lands on an element with no handler and the
-// drop silently does nothing even though the indicator still shows. The
-// container computes the nearest valid target from the cursor position
-// instead, so every position in the list resolves to something.
+// Three drag sources, one shared `draggedItem` state:
+//   - a lone app's button       -> { type: 'app', id }
+//   - a group member's button   -> { type: 'app', id } (identical — which
+//     group, if any, it's currently in is server-side state, not something
+//     the drag needs to track; see config-store's detachFromGroup)
+//   - a group's own container   -> { type: 'group', id }
 //
-// Icons inside a group can only reorder within that same group; dragging
-// one out to merge/extract isn't supported — use the right-click "Remove
-// from group" action for that instead.
+// Two drop behaviors:
+//   - Reorder (drop near a container's top/bottom edge, or in the gap
+//     between two containers): shows a horizontal bar *between* items and
+//     repositions the dragged item at the top level. Handled by #sidebar's
+//     delegated dragover/drop — see resolveTopLevelTarget's comment for why
+//     it's delegated rather than per-item.
+//   - Merge (drop on an app button, anywhere but its outer edge): highlights
+//     that button directly and inserts the dragged app immediately
+//     before/after it — into a new group if the target is a lone app, or at
+//     that exact position in an existing group. Handled per-button, since
+//     it needs to know exactly which button and which half of it.
+// A group's own container can't be a merge target directly — only the app
+// buttons inside it are (including when it has just one).
 
-const SIDEBAR_GAP = 4; // must match #sidebar's `gap` in styles.css
-const GROUP_GAP = 2; // must match .app-group's `gap` in styles.css
+const SIDEBAR_GAP = 7; // must match #sidebar's `gap` in styles.css
+const MEMBER_GAP = 2; // must match .app-group's `gap` in styles.css
 
 // Positioned via `position: fixed` from the target's own
 // getBoundingClientRect() rather than inserted into the flex flow — an
@@ -239,12 +244,19 @@ function positionIndicator(referenceEl, before, gap) {
   dropIndicator.hidden = false;
 }
 
+function setMergeTarget(el) {
+  if (mergeTargetEl === el) return;
+  if (mergeTargetEl) mergeTargetEl.classList.remove('drop-merge');
+  mergeTargetEl = el;
+  if (mergeTargetEl) mergeTargetEl.classList.add('drop-merge');
+}
+
 function clearDropState() {
   dropIndicator.hidden = true;
-  if (mergeTargetEl) mergeTargetEl.classList.remove('drop-merge');
-  mergeTargetEl = null;
+  setMergeTarget(null);
   currentZone = null;
   currentTargetItem = null;
+  currentMergeReference = null;
 }
 
 function itemForElement(el) {
@@ -253,7 +265,10 @@ function itemForElement(el) {
 
 // Finds the top-level item whose vertical span contains clientY, or — if
 // the cursor is above the first item, below the last, or in a gap between
-// two — the nearest one, so there's always a usable target.
+// two — the nearest one, so there's always a usable target. Used only for
+// the reorder case; merge targeting is handled per-button (see
+// attachButtonDragHandlers), since it needs a specific button, not just
+// whichever container the cursor happens to be over.
 function resolveTopLevelTarget(clientY) {
   const children = Array.from(sidebar.children).filter((el) => el !== addButton);
   if (children.length === 0) return null;
@@ -284,11 +299,13 @@ function resolveTopLevelTarget(clientY) {
   return null;
 }
 
-let draggedItem = null; // { type, id }
+let draggedItem = null; // { type: 'app' | 'group', id }
 let currentZone = null; // 'before' | 'after' | 'merge'
-let currentTargetItem = null;
+let currentTargetItem = null; // the container-level item a drop applies to
+let currentMergeReference = null; // { appId, before } — set only when currentZone === 'merge'
 
-function attachDragHandlers(el, item) {
+// Whole-group container as a drag source (reorder the group as a unit).
+function attachContainerDragHandlers(el, item) {
   el.draggable = true;
   el.addEventListener('dragstart', () => {
     draggedItem = item;
@@ -298,6 +315,68 @@ function attachDragHandlers(el, item) {
     el.classList.remove('dragging');
     clearDropState();
     draggedItem = null;
+  });
+}
+
+// A single app button, whether alone in its container or a group member —
+// both a drag source (this specific app) and, while some other app is being
+// dragged, a precise merge target (insert immediately before/after it).
+function attachButtonDragHandlers(button, appId, containerItem) {
+  button.draggable = true;
+
+  button.addEventListener('dragstart', (e) => {
+    e.stopPropagation(); // don't also start the parent group container's own drag
+    draggedItem = { type: 'app', id: appId };
+    button.classList.add('dragging');
+  });
+
+  button.addEventListener('dragend', (e) => {
+    e.stopPropagation();
+    button.classList.remove('dragging');
+    clearDropState();
+    draggedItem = null;
+  });
+
+  button.addEventListener('dragover', (e) => {
+    if (!draggedItem || draggedItem.type !== 'app' || draggedItem.id === appId) return;
+    e.preventDefault();
+    e.stopPropagation(); // handled precisely here — don't let #sidebar's coarser container-level logic also fire
+    const rect = button.getBoundingClientRect();
+    const before = e.clientY - rect.top < rect.height / 2;
+    // The whole group is highlighted (it's where the drop lands), and a
+    // thin bar between the buttons shows exactly which position within it —
+    // sized to the button, not the container, and sitting in the small gap
+    // between icons rather than overlapping either one's own edge, which is
+    // what made an earlier version of this look like it was "intersecting".
+    positionIndicator(button, before, MEMBER_GAP);
+    currentZone = 'merge';
+    currentTargetItem = containerItem;
+    currentMergeReference = { appId, before };
+    setMergeTarget(button.closest('.app-group'));
+  });
+
+  button.addEventListener('drop', async (e) => {
+    if (!draggedItem || draggedItem.type !== 'app' || draggedItem.id === appId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const source = draggedItem;
+    const { before } = currentMergeReference;
+    clearDropState();
+
+    if (containerItem.type === 'group') {
+      const group = groupsById.get(containerItem.id);
+      if (group?.appIds.includes(source.id)) {
+        const newAppIds = group.appIds.filter((id) => id !== source.id);
+        const idx = newAppIds.indexOf(appId);
+        newAppIds.splice(before ? idx : idx + 1, 0, source.id);
+        await window.electronAPI.reorderGroupMembers(group.id, newAppIds);
+      } else {
+        await window.electronAPI.mergeIntoGroup(containerItem.id, source.id, appId, before);
+      }
+    } else {
+      await window.electronAPI.createGroup(source.id, containerItem.id, before);
+    }
+    await refreshLayout();
   });
 }
 
@@ -317,31 +396,36 @@ sidebar.addEventListener('dragover', (e) => {
     return;
   }
 
+  // Reorder-only zone: a fixed band near the container's outer edge (not a
+  // fraction of its height — a tall multi-member group shouldn't need a
+  // huge edge band just to reorder it, since merge targeting now lives on
+  // the individual buttons instead of a big "middle 50%" of the container).
+  const EDGE_ZONE_PX = 6;
   let zone;
   if (!withinBounds) {
     zone = edge === 'top' ? 'before' : 'after';
+  } else if (e.clientY - rect.top < EDGE_ZONE_PX) {
+    zone = 'before';
+  } else if (rect.bottom - e.clientY < EDGE_ZONE_PX) {
+    zone = 'after';
+  } else if (draggedItem.type === 'app') {
+    // Cursor is over this container but not over any specific button (e.g.
+    // its padding, or gaps between members) — fall back to "merge at the
+    // end", same as before per-button merge targeting existed.
+    zone = 'merge';
   } else {
-    const offsetY = e.clientY - rect.top;
-    const canMerge = draggedItem.type === 'app';
-    if (offsetY < rect.height * 0.25) zone = 'before';
-    else if (offsetY > rect.height * 0.75) zone = 'after';
-    else if (canMerge) zone = 'merge';
-    else zone = offsetY < rect.height / 2 ? 'before' : 'after';
+    zone = e.clientY - rect.top < rect.height / 2 ? 'before' : 'after';
   }
 
   currentZone = zone;
   currentTargetItem = item;
+  currentMergeReference = null;
 
   if (zone === 'merge') {
     dropIndicator.hidden = true;
-    if (mergeTargetEl && mergeTargetEl !== el) mergeTargetEl.classList.remove('drop-merge');
-    mergeTargetEl = el;
-    el.classList.add('drop-merge');
+    setMergeTarget(el);
   } else {
-    if (mergeTargetEl) {
-      mergeTargetEl.classList.remove('drop-merge');
-      mergeTargetEl = null;
-    }
+    setMergeTarget(null);
     positionIndicator(el, zone === 'before', SIDEBAR_GAP);
   }
 });
@@ -364,67 +448,15 @@ sidebar.addEventListener('drop', async (e) => {
 
   if (zone === 'merge') {
     if (item.type === 'app') {
-      await window.electronAPI.createGroup(source.id, item.id);
+      await window.electronAPI.createGroup(source.id, item.id, false);
     } else {
       await window.electronAPI.mergeIntoGroup(item.id, source.id);
     }
   } else {
-    const newOrder = items.filter((i) => !(i.type === source.type && i.id === source.id));
-    const targetIdx = newOrder.findIndex((i) => i.type === item.type && i.id === item.id);
-    const insertAt = zone === 'before' ? targetIdx : targetIdx + 1;
-    newOrder.splice(insertAt, 0, source);
-    await window.electronAPI.reorderSidebar(newOrder);
+    await window.electronAPI.moveSidebarItem(source.type, source.id, item.type, item.id, zone === 'before');
   }
   await refreshLayout();
 });
-
-let draggedMember = null; // { groupId, appId }
-
-function attachGroupMemberDragHandlers(el, group, appId) {
-  el.draggable = true;
-
-  el.addEventListener('dragstart', (e) => {
-    e.stopPropagation();
-    draggedMember = { groupId: group.id, appId };
-    el.classList.add('dragging');
-  });
-
-  el.addEventListener('dragend', (e) => {
-    e.stopPropagation();
-    el.classList.remove('dragging');
-    clearDropState();
-    draggedMember = null;
-  });
-
-  el.addEventListener('dragover', (e) => {
-    // Only intercept drags of a *member of this same group* — anything else
-    // (a top-level app/group being dragged over this icon) must bubble up
-    // to #sidebar's delegated handler, which does its own geometric hit
-    // test and doesn't depend on this element in particular.
-    if (!draggedMember || draggedMember.groupId !== group.id || draggedMember.appId === appId) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const rect = el.getBoundingClientRect();
-    currentZone = e.clientY - rect.top < rect.height / 2 ? 'before' : 'after';
-    positionIndicator(el, currentZone === 'before', GROUP_GAP);
-  });
-
-  el.addEventListener('drop', async (e) => {
-    if (!draggedMember || draggedMember.groupId !== group.id) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const sourceAppId = draggedMember.appId;
-    const before = currentZone === 'before';
-    clearDropState();
-
-    const newAppIds = group.appIds.filter((id) => id !== sourceAppId);
-    const targetIdx = newAppIds.indexOf(appId);
-    newAppIds.splice(before ? targetIdx : targetIdx + 1, 0, sourceAppId);
-    await window.electronAPI.reorderGroupMembers(group.id, newAppIds);
-    draggedMember = null;
-    await refreshLayout();
-  });
-}
 
 // --- Full sidebar (re)render — simplest robust way to reflect merges,
 // ungroups, reorders and removals without hand-patching the DOM tree.
@@ -492,10 +524,11 @@ function openAddAppDialog() {
   overlay.className = 'add-app-overlay';
   overlay.innerHTML = `
     <form class="add-app-form">
-      <label>URL or search<input name="url" type="text" placeholder="Enter a URL or search term" required autocomplete="off" /></label>
-      <div class="add-app-actions">
-        <button type="button" data-action="cancel">Cancel</button>
-        <button type="submit">Add</button>
+      <div class="add-app-search">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" />
+        </svg>
+        <input name="url" type="text" placeholder="Search or type URL" autocomplete="off" />
       </div>
     </form>
   `;
@@ -508,14 +541,21 @@ function openAddAppDialog() {
   };
 
   const form = overlay.querySelector('form');
-  overlay.querySelector('[data-action="cancel"]').addEventListener('click', closeDialog);
+  const input = form.elements.url;
+
+  // No cancel/add buttons — Enter submits (implicit form submission from a
+  // lone text input), Escape backs out, and clicking the empty area around
+  // the search box also backs out.
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDialog();
+  });
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) closeDialog();
   });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const url = form.elements.url.value.trim();
+    const url = input.value.trim();
     if (!url) return;
 
     const newApp = await window.electronAPI.addApp({ url });
@@ -526,7 +566,7 @@ function openAddAppDialog() {
     setActive(newApp.id);
   });
 
-  form.elements.url.focus();
+  input.focus();
 }
 
 async function init() {
