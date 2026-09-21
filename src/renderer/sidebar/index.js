@@ -576,6 +576,10 @@ async function init() {
     const first = items[0];
     const firstAppId = first.type === 'app' ? first.id : groupsById.get(first.id)?.appIds[0];
     if (firstAppId) setActive(firstAppId);
+  } else {
+    // Nothing pinned yet (a fresh install) — go straight to adding the
+    // first app instead of showing an empty sidebar with just a '+'.
+    openAddAppDialog();
   }
 
   const navState = await window.electronAPI.getNavState();

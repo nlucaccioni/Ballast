@@ -5,13 +5,16 @@
   "description": "A Station/Wavebox-style Electron app for pinning and switching between isolated web apps.",
   "main": "src/main/index.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
   },
   "keywords": [],
-  "author": "",
+  "author": "nlucaccioni",
   "license": "MIT",
   "devDependencies": {
     "electron": "^44.4.3",
+    "electron-builder": "^26.15.3",
     "lucide-static": "^1.47.0"
   },
   "dependencies": {

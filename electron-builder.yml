@@ -1,0 +1,47 @@
+appId: com.nlucaccioni.ballast
+productName: Ballast
+copyright: Copyright © 2026 nlucaccioni
+
+directories:
+  output: dist
+  buildResources: assets
+
+files:
+  - src/**/*
+  - config/**/*
+  - package.json
+  - "!**/*.map"
+
+publish:
+  provider: github
+  owner: nlucaccioni
+  repo: ballast
+
+# No custom icon yet (see assets/icons/) — electron-builder falls back to a
+# default icon on each platform, which is fine to ship with for now; drop
+# an icon.ico/icon.icns in there and reference them below once they exist.
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+# Unsigned (no Apple Developer ID cert / notarization configured) — macOS
+# Gatekeeper will flag the app as being from an unidentified developer.
+# Users need to right-click -> Open the first time, or run
+# `xattr -cr /Applications/Ballast.app` to clear the quarantine flag.
+# Fixing this for real means enrolling in the Apple Developer Program and
+# wiring up CSC_LINK/APPLE_ID secrets in the release workflow.
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  category: public.app-category.productivity

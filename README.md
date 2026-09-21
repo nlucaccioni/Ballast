@@ -5,8 +5,7 @@ Calendar, etc.), each isolated in its own session, with support for grouping
 related apps together, live favicons, unread badges, and account sharing
 across apps from the same provider.
 
-Built with Electron. Currently an MVP — the sidebar UI is a functional
-placeholder, not a final design.
+Built with Electron.
 
 ## Running locally
 
@@ -20,7 +19,9 @@ binary in `node_modules`.
 
 ## Adding an app
 
-Click the `+` button at the bottom of the sidebar and either:
+Ballast starts with no apps pinned — the first launch opens straight to the
+add-app screen. Click the `+` button at the bottom of the sidebar (any time
+after that) and either:
 
 - Type a URL (e.g. `mail.google.com`) — `https://` is inferred if you leave
   it off.
@@ -39,10 +40,10 @@ icon to remove it from its group or from the sidebar entirely.
   persisted app config, IPC handlers.
 - `src/preload/` — context-bridge preload scripts for the sidebar and for
   each pinned app's own view.
-- `src/renderer/sidebar/` — the sidebar UI itself (placeholder, see above).
+- `src/renderer/sidebar/` — the sidebar UI itself.
 - `config/default-apps.json` — seed app list used the first time the app
-  runs; after that, the user's own config (in the OS user-data directory)
-  takes over.
+  runs (empty by default); after that, the user's own config (in the OS
+  user-data directory) takes over.
 
 ## License
 

@@ -1,0 +1,33 @@
+name: Release
+
+# Pushing a version tag (e.g. v0.1.0) builds Ballast on both a Windows and a
+# macOS runner and publishes both artifacts to a GitHub Release matching
+# that tag — see electron-builder.yml's `publish` config. Nothing here can
+# produce a real Mac build locally on Windows, which is why this exists.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - run: npx electron-builder --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
