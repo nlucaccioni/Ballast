@@ -363,6 +363,52 @@ function removeApp(appId) {
   setSidebarOrder(getSidebarOrder().filter((item) => !(item.type === 'app' && item.id === appId)));
 }
 
+// --- Tabs: links opened from within a pinned app (e.g. a tracking link in
+// an email) that shouldn't either hijack the app's own view or kick out to
+// the OS browser — see ViewManager.openTab. Live alongside the owning app
+// rather than in their own top-level list since they're never a sidebar
+// item themselves; only the app that owns them is. Session-scoped by
+// intent (see ViewManager) but the *list* (url/title/favicon, not the
+// live view) is persisted so the tab strip can restore instantly on
+// relaunch without eagerly loading every tab's page.
+function generateTabId() {
+  return `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function getTabs(appId) {
+  return getApp(appId)?.tabs || [];
+}
+
+function addTab(appId, { url, title, faviconUrl }) {
+  const tab = { id: generateTabId(), url, title: title || url, faviconUrl: faviconUrl || null };
+  setApps(getApps().map((app) => (app.id === appId ? { ...app, tabs: [...(app.tabs || []), tab] } : app)));
+  return tab;
+}
+
+function updateTab(appId, tabId, partial) {
+  setApps(
+    getApps().map((app) =>
+      app.id === appId ? { ...app, tabs: (app.tabs || []).map((t) => (t.id === tabId ? { ...t, ...partial } : t)) } : app
+    )
+  );
+}
+
+function removeTab(appId, tabId) {
+  setApps(
+    getApps().map((app) => (app.id === appId ? { ...app, tabs: (app.tabs || []).filter((t) => t.id !== tabId) } : app))
+  );
+}
+
+function reorderTabs(appId, tabIds) {
+  setApps(
+    getApps().map((app) => {
+      if (app.id !== appId) return app;
+      const byId = new Map((app.tabs || []).map((t) => [t.id, t]));
+      return { ...app, tabs: tabIds.map((id) => byId.get(id)).filter(Boolean) };
+    })
+  );
+}
+
 // One-time normalization so apps already persisted under the old
 // per-app-id partition scheme pick up the shared-by-root-domain one above.
 function migratePartitions() {
@@ -398,5 +444,11 @@ module.exports = {
   removeAppFromGroup,
   reorderGroupMembers,
   moveSidebarItem,
+  getTabs,
+  addTab,
+  updateTab,
+  removeTab,
+  reorderTabs,
+  resolveAppUrl,
   SEARCH_ENGINE_ROOT_DOMAINS,
 };

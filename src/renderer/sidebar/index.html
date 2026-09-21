@@ -32,6 +32,10 @@
           </svg>
         </button>
       </div>
+      <!-- Populated per active app: its own primary "tab" plus any tabs
+           opened from links inside it (see main/view-manager.js's
+           attachWindowOpenHandler). Empty/hidden for an app with none. -->
+      <div id="tab-strip"></div>
     </div>
     <div id="sidebar"></div>
     <!-- The webview itself is a native WebContentsView, not stylable with

@@ -32,18 +32,20 @@ function updateNavButtons({ canGoBack, canGoForward }) {
   navForwardButton.disabled = !canGoForward;
 }
 
-window.electronAPI.onNavStateChanged(({ appId, ...navState }) => {
-  if (appId === activeAppId) updateNavButtons(navState);
-});
+// Main only ever reports nav state for whichever view (a pinned app's own
+// primary view, or one of its tabs) is currently focused, so there's no
+// appId to check here — whatever arrives is always about what's on screen.
+window.electronAPI.onNavStateChanged((navState) => updateNavButtons(navState));
 
 // --- State mirrored from main (see GET_APPS: { apps, groups, items }) ---
 
 let items = []; // sidebar order: { type: 'app' | 'group', id }[]
-const appsById = new Map(); // appId -> latest known app data
+const appsById = new Map(); // appId -> latest known app data (includes .tabs)
 const groupsById = new Map(); // groupId -> { id, label, appIds }
 const buttonsByAppId = new Map(); // appId -> the clickable element representing it (standalone or group-member)
 
 let activeAppId = null;
+let activeTabId = null; // null = the active app's own primary view, not one of its tabs
 let activeButtonEl = null;
 
 function isAppInGroup(appId) {
@@ -100,6 +102,290 @@ function attachTooltip(button, getText) {
   button.addEventListener('mouseleave', hideTooltip);
   button.addEventListener('mousedown', hideTooltip);
 }
+
+// --- Tab strip: the active app's own primary view plus any tabs opened
+// from links inside it (see main/view-manager.js's attachWindowOpenHandler
+// and openTab). Only ever shows the currently active app's own tabs —
+// switching pinned apps swaps the whole strip, it doesn't accumulate.
+
+const tabStripEl = document.getElementById('tab-strip');
+
+function closeIconSvg() {
+  return (
+    '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>'
+  );
+}
+
+function buildTabChip({ label, faviconUrl, isActive, onSelect, onContextMenu, onClose }) {
+  const chip = document.createElement('button');
+  chip.className = isActive ? 'tab-chip active' : 'tab-chip';
+  chip.type = 'button';
+
+  if (faviconUrl) {
+    const img = document.createElement('img');
+    img.className = 'tab-chip-favicon';
+    img.src = faviconUrl;
+    img.alt = '';
+    img.draggable = false;
+    chip.appendChild(img);
+  }
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'tab-chip-title';
+  titleEl.textContent = label;
+  chip.appendChild(titleEl);
+
+  if (onClose) {
+    const closeEl = document.createElement('span');
+    closeEl.className = 'tab-chip-close';
+    closeEl.innerHTML = closeIconSvg();
+    closeEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onClose();
+    });
+    chip.appendChild(closeEl);
+  }
+
+  chip.addEventListener('click', (e) => onSelect(e));
+  if (onContextMenu) {
+    chip.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      onContextMenu(e);
+    });
+  }
+  return chip;
+}
+
+// Which tab (if any) the URL/duplicate/promote/open-externally menu is
+// currently open for — a *renderer-side* mirror of main's own tabMenuContext
+// (see view-manager.js), kept in sync via onActiveViewChanged below, so a
+// second click on the same already-active chip toggles it closed rather than
+// re-opening what's already open.
+// undefined = no menu open; null = the primary chip's; else a tab id —
+// mirrors main's own ViewManager.tabMenuContext.tabId representation.
+let tabMenuOpenKey;
+
+function openTabMenuFor(key, chipEl) {
+  const rect = chipEl.getBoundingClientRect();
+  window.electronAPI.openTabMenu(activeAppId, key, {
+    x: Math.round(rect.left + rect.width / 2),
+    y: Math.round(rect.bottom),
+  });
+  tabMenuOpenKey = key;
+}
+
+// Shared by both the primary chip and tab chips: a click either switches to
+// that chip (if it isn't already active) or toggles its menu (if it is —
+// there's nothing left to "switch to").
+function handleChipClick(key, chipEl, isCurrentlyActive) {
+  if (!isCurrentlyActive) {
+    window.electronAPI.switchTab(activeAppId, key);
+    return;
+  }
+  if (tabMenuOpenKey === key) {
+    window.electronAPI.closeTabMenu();
+    tabMenuOpenKey = undefined;
+  } else {
+    openTabMenuFor(key, chipEl);
+  }
+}
+
+// A plain OS right-click menu with the same actions, at the cursor —
+// doesn't touch which chip is active, unlike the click-driven overlay above.
+function handleChipContextMenu(key, e) {
+  window.electronAPI.openTabContextMenu(activeAppId, key, {
+    x: Math.round(e.clientX),
+    y: Math.round(e.clientY),
+  });
+}
+
+// --- Tab reorder (secondary tabs only — the primary chip isn't a drag
+// source or a drop target). Indicator styling matches the sidebar's own
+// reorder bar exactly (see positionIndicator), just rotated: a vertical bar
+// sized to the chip's height, positioned in the gap outside it rather than
+// overlapping the chip's own rounded corners.
+//
+// Delegated on #tab-strip itself rather than per-chip dragover/drop — a
+// per-chip listener only fires while the cursor is directly over that
+// chip, so dragging past the first (or last) one left the indicator
+// showing a position drop wouldn't actually land on, the same bug the
+// sidebar's own reorder had before it moved to a delegated listener (see
+// resolveTopLevelTarget's comment there).
+
+const tabDropIndicator = document.createElement('div');
+tabDropIndicator.className = 'drop-indicator';
+tabDropIndicator.hidden = true;
+document.body.appendChild(tabDropIndicator);
+
+let draggedTabId = null;
+let tabDropTarget = null; // { tabId, before } | null
+
+function positionTabDropIndicator(chip, before) {
+  const rect = chip.getBoundingClientRect();
+  const gap = 4; // must match #tab-strip's gap in styles.css
+  const x = before ? rect.left - gap / 2 : rect.right + gap / 2;
+  tabDropIndicator.style.top = `${Math.round(rect.top)}px`;
+  tabDropIndicator.style.left = `${Math.round(x)}px`;
+  tabDropIndicator.style.width = '2px';
+  tabDropIndicator.style.height = `${Math.round(rect.height)}px`;
+  tabDropIndicator.hidden = false;
+}
+
+function clearTabDragIndicator() {
+  tabDropIndicator.hidden = true;
+  tabDropTarget = null;
+}
+
+// Finds the tab chip whose position the cursor's X coordinate resolves to
+// — directly over one, or (before the first / after the last / in the gap
+// between two) the nearest one — so every X position within the strip
+// maps to a usable target, not just the exact bounds of each chip.
+function resolveTabDropTarget(clientX) {
+  const chips = Array.from(tabStripEl.querySelectorAll('.tab-chip[draggable="true"]'));
+  if (chips.length === 0) return null;
+
+  for (const chip of chips) {
+    const rect = chip.getBoundingClientRect();
+    if (clientX >= rect.left && clientX <= rect.right) {
+      return { chip, before: clientX - rect.left < rect.width / 2 };
+    }
+  }
+
+  const firstRect = chips[0].getBoundingClientRect();
+  if (clientX < firstRect.left) return { chip: chips[0], before: true };
+
+  const lastRect = chips[chips.length - 1].getBoundingClientRect();
+  if (clientX > lastRect.right) return { chip: chips[chips.length - 1], before: false };
+
+  for (let i = 0; i < chips.length - 1; i += 1) {
+    const r1 = chips[i].getBoundingClientRect();
+    const r2 = chips[i + 1].getBoundingClientRect();
+    if (clientX >= r1.right && clientX <= r2.left) {
+      const closerToFirst = clientX - r1.right < r2.left - clientX;
+      return closerToFirst ? { chip: chips[i], before: false } : { chip: chips[i + 1], before: true };
+    }
+  }
+  return null;
+}
+
+tabStripEl.addEventListener('dragover', (e) => {
+  if (!draggedTabId) return;
+  e.preventDefault();
+
+  const resolved = resolveTabDropTarget(e.clientX);
+  if (!resolved || resolved.chip.dataset.tabId === draggedTabId) {
+    clearTabDragIndicator();
+    return;
+  }
+  positionTabDropIndicator(resolved.chip, resolved.before);
+  tabDropTarget = { tabId: resolved.chip.dataset.tabId, before: resolved.before };
+});
+
+tabStripEl.addEventListener('dragleave', (e) => {
+  if (!tabStripEl.contains(e.relatedTarget)) clearTabDragIndicator();
+});
+
+tabStripEl.addEventListener('drop', async (e) => {
+  if (!draggedTabId || !tabDropTarget) return;
+  e.preventDefault();
+  const sourceId = draggedTabId;
+  const { tabId: targetId, before } = tabDropTarget;
+  clearTabDragIndicator();
+  draggedTabId = null;
+
+  const tabs = appsById.get(activeAppId)?.tabs || [];
+  const order = tabs.map((t) => t.id);
+  const fromIdx = order.indexOf(sourceId);
+  if (fromIdx === -1) return;
+  order.splice(fromIdx, 1);
+  const targetIdx = order.indexOf(targetId);
+  if (targetIdx === -1) return;
+  order.splice(before ? targetIdx : targetIdx + 1, 0, sourceId);
+
+  await window.electronAPI.reorderTabs(activeAppId, order);
+});
+
+function attachTabDragHandlers(chip, tab) {
+  chip.draggable = true;
+  chip.dataset.tabId = tab.id;
+
+  chip.addEventListener('dragstart', (e) => {
+    e.stopPropagation();
+    draggedTabId = tab.id;
+    chip.classList.add('dragging');
+  });
+
+  chip.addEventListener('dragend', (e) => {
+    e.stopPropagation();
+    chip.classList.remove('dragging');
+    clearTabDragIndicator();
+    draggedTabId = null;
+  });
+}
+
+function renderTabStrip() {
+  tabStripEl.replaceChildren();
+  if (!activeAppId) return;
+  const app = appsById.get(activeAppId);
+  const tabs = app?.tabs || [];
+
+  tabStripEl.appendChild(
+    buildTabChip({
+      label: app.title || app.name || app.url,
+      faviconUrl: app.faviconUrl,
+      isActive: !activeTabId,
+      onSelect: (e) => handleChipClick(null, e.currentTarget, !activeTabId),
+      onContextMenu: (e) => handleChipContextMenu(null, e),
+    })
+  );
+
+  if (tabs.length > 0) {
+    const separator = document.createElement('div');
+    separator.className = 'tab-strip-separator';
+    tabStripEl.appendChild(separator);
+  }
+
+  tabs.forEach((tab) => {
+    const chip = buildTabChip({
+      label: tab.title || tab.url,
+      faviconUrl: tab.faviconUrl,
+      isActive: activeTabId === tab.id,
+      onSelect: (e) => handleChipClick(tab.id, e.currentTarget, activeTabId === tab.id),
+      onContextMenu: (e) => handleChipContextMenu(tab.id, e),
+      onClose: () => window.electronAPI.closeTab(activeAppId, tab.id),
+    });
+    // Distinguishes it from the primary chip for the shrink-to-fit and
+    // hover-to-reveal-close-button rules in styles.css, which only apply
+    // to secondary tabs.
+    chip.classList.add('tab-chip-secondary');
+    attachTabDragHandlers(chip, tab);
+    tabStripEl.appendChild(chip);
+  });
+}
+
+window.electronAPI.onTabsChanged(({ appId, tabs }) => {
+  const app = appsById.get(appId);
+  if (app) app.tabs = tabs;
+  if (appId === activeAppId) renderTabStrip();
+});
+
+// Drives tab-strip/sidebar-highlight sync for every kind of focus change —
+// clicking a sidebar app, clicking a tab chip, and a link opening a new tab
+// (main-process-initiated, no renderer action to key off of) all funnel
+// through here via this one push from main rather than each needing its
+// own bespoke handling.
+window.electronAPI.onActiveViewChanged(({ appId, tabId }) => {
+  if (appId && appId !== activeAppId) setActive(appId);
+  activeTabId = tabId;
+  // Focus moved away from whichever chip the menu was open for — main
+  // closes it automatically in that case (see ViewManager.setFocusedView),
+  // so this mirror needs to follow rather than assume it's still open.
+  if (tabMenuOpenKey !== undefined && tabMenuOpenKey !== tabId) tabMenuOpenKey = undefined;
+  renderTabStrip();
+});
+
+window.electronAPI.onAppsChanged(() => refreshLayout());
 
 // --- App buttons: meta rendering shared between standalone and grouped ---
 
@@ -482,6 +768,7 @@ async function refreshLayout() {
   data.groups.forEach((group) => groupsById.set(group.id, group));
   items = data.items;
   renderSidebar();
+  renderTabStrip();
 }
 
 window.electronAPI.onMetaChanged(({ appId, ...meta }) => {
@@ -490,6 +777,8 @@ window.electronAPI.onMetaChanged(({ appId, ...meta }) => {
   if (!button || !app) return;
   Object.assign(app, meta);
   applyAppMeta(button, app);
+  // The primary tab chip's label/favicon mirror the app's own meta.
+  if (appId === activeAppId && !activeTabId) renderTabStrip();
 });
 
 window.electronAPI.onUnreadChanged(({ appId, count }) => {
@@ -575,15 +864,20 @@ async function init() {
   if (items.length > 0) {
     const first = items[0];
     const firstAppId = first.type === 'app' ? first.id : groupsById.get(first.id)?.appIds[0];
-    if (firstAppId) setActive(firstAppId);
+    if (firstAppId) {
+      setActive(firstAppId);
+      // Tabs never auto-restore focus on launch (see main/view-manager.js's
+      // activeTabByApp, which starts empty each process start) — the app's
+      // own primary view is always what's showing at this point.
+      renderTabStrip();
+    }
   } else {
     // Nothing pinned yet (a fresh install) — go straight to adding the
     // first app instead of showing an empty sidebar with just a '+'.
     openAddAppDialog();
   }
 
-  const navState = await window.electronAPI.getNavState();
-  if (navState.appId === activeAppId) updateNavButtons(navState);
+  updateNavButtons(await window.electronAPI.getNavState());
 }
 
 init();

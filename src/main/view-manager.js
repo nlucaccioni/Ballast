@@ -4,7 +4,14 @@ const { getSessionForApp } = require('./session-manager');
 const { rootDomain, looksLikeAuthFlow } = require('./url-utils');
 const { watchTitleCount } = require('./unread-tracker');
 const configStore = require('./config-store');
-const { APP_META_CHANGED, NAV_STATE_CHANGED, UNREAD_CHANGED } = require('../renderer/shared/ipc-channels');
+const {
+  APP_META_CHANGED,
+  NAV_STATE_CHANGED,
+  UNREAD_CHANGED,
+  TABS_CHANGED,
+  ACTIVE_VIEW_CHANGED,
+  APPS_CHANGED,
+} = require('../renderer/shared/ipc-channels');
 
 const SIDEBAR_WIDTH = 54; // adjust to final design; must match --sidebar-width in sidebar/styles.css
 const TITLEBAR_HEIGHT = 36; // must match --titlebar-height in sidebar/styles.css
@@ -24,6 +31,20 @@ const CORNER_BOX_SIZE = CORNER_RADIUS + BORDER_WIDTH;
 // fit), so this only needs to be large enough for realistic titles.
 const TOOLTIP_WIDTH = 260;
 const TOOLTIP_HEIGHT = 24;
+// No native auto-sizing across the WebContentsView boundary, so this box is
+// sized here to exactly fit tab-menu/index.html's content — these must
+// match that file's own #menu padding/gap and row heights (see its comment).
+const TAB_MENU_WIDTH = 280;
+const TAB_MENU_ROW_HEIGHT = 30;
+const TAB_MENU_GAP = 6;
+const TAB_MENU_PADDING = 8;
+// Rows below the URL field: primary view only offers duplicate/open-
+// externally; a tab also offers promoting itself to an app or to primary.
+function tabMenuHeight(isPrimary) {
+  const actionRows = isPrimary ? 2 : 4;
+  const rows = 1 + actionRows; // + the URL field itself
+  return TAB_MENU_PADDING * 2 + rows * TAB_MENU_ROW_HEIGHT + (rows - 1) * TAB_MENU_GAP;
+}
 
 // Electron's default UA appends "Electron/x.y.z", which is exactly what
 // sites like WhatsApp Web and Teams sniff for to show an "unsupported
@@ -39,13 +60,16 @@ const DESKTOP_USER_AGENT =
 class ViewManager {
   constructor(win) {
     this.win = win;
-    this.views = new Map(); // appId -> WebContentsView
+    this.views = new Map(); // appId -> WebContentsView (each pinned app's own primary view)
+    this.tabViews = new Map(); // tabId -> WebContentsView (lazily created — see getOrCreateTabView)
+    this.activeTabByApp = new Map(); // appId -> tabId | null (null = that app's own primary view)
+    this.focusedView = null; // whichever view (primary or tab) is currently attached/visible
     this.meta = new Map(); // appId -> { title, faviconUrl }
     this.unread = new Map(); // appId -> count
-    this.activeId = null;
+    this.activeId = null; // which pinned app is selected in the sidebar
 
     this.win.on('resize', () => {
-      if (this.activeId) this.layout(this.views.get(this.activeId));
+      if (this.focusedView) this.layout(this.focusedView);
     });
 
     // Electron has no API to round a WebContentsView's own corner, so this
@@ -82,6 +106,24 @@ class ViewManager {
       path.join(__dirname, '..', 'renderer', 'tooltip-overlay', 'index.html')
     );
     this.win.contentView.addChildView(this.tooltipOverlay);
+
+    // Same technique again for the per-tab menu (URL field + duplicate/
+    // promote/open-externally actions) — needs to float above whatever tab
+    // is currently showing rather than replacing it. Starts at zero size
+    // (invisible) until openTabMenu() positions and sizes it.
+    this.tabMenuOverlay = new WebContentsView({
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'preload', 'tab-menu-preload.js'),
+        contextIsolation: true,
+        sandbox: true,
+      },
+    });
+    this.tabMenuOverlay.setBackgroundColor('#00000000');
+    this.tabMenuOverlay.webContents.loadFile(
+      path.join(__dirname, '..', 'renderer', 'tab-menu', 'index.html')
+    );
+    this.win.contentView.addChildView(this.tabMenuOverlay);
+    this.tabMenuContext = null; // { appId, tabId } while open, else null
   }
 
   // Re-adding an existing child view moves it to the top of the z-order, so
@@ -90,6 +132,7 @@ class ViewManager {
   raiseOverlays() {
     this.win.contentView.addChildView(this.cornerMask);
     this.win.contentView.addChildView(this.tooltipOverlay);
+    this.win.contentView.addChildView(this.tabMenuOverlay);
   }
 
   showTooltip(text, x, y) {
@@ -105,6 +148,237 @@ class ViewManager {
 
   hideTooltip() {
     this.tooltipOverlay.webContents.send('tooltip:update', { visible: false });
+  }
+
+  // Opened by clicking a chip that's already active (see sidebar index.js)
+  // — the app's own primary chip or one of its tabs — a small menu
+  // centered below it for editing the current URL directly, duplicating
+  // it, promoting a tab to its own pinned app or to primary, or handing it
+  // off to the OS browser. tabId is null for the primary view's own menu.
+  openTabMenu(appId, tabId, x, y) {
+    const isPrimary = !tabId;
+    let url;
+    if (isPrimary) {
+      const view = this.views.get(appId);
+      const app = configStore.getApp(appId);
+      if (!view || !app) return;
+      url = view.webContents.getURL() || app.lastUrl || app.url;
+    } else {
+      const tab = configStore.getTabs(appId).find((t) => t.id === tabId);
+      if (!tab) return;
+      url = this.tabViews.get(tabId)?.webContents.getURL() || tab.url;
+    }
+
+    this.tabMenuContext = { appId, tabId: isPrimary ? null : tabId };
+    const [contentWidth] = this.win.getContentSize();
+    const centeredX = Math.round(x) - TAB_MENU_WIDTH / 2;
+    const clampedX = Math.max(8, Math.min(centeredX, contentWidth - TAB_MENU_WIDTH - 8));
+    this.tabMenuOverlay.setBounds({
+      x: clampedX,
+      y: Math.round(y) + 4,
+      width: TAB_MENU_WIDTH,
+      height: tabMenuHeight(isPrimary),
+    });
+    this.tabMenuOverlay.webContents.send('tab-menu:open', { url, isPrimary });
+    this.raiseOverlays();
+  }
+
+  closeTabMenu() {
+    this.tabMenuContext = null;
+    this.tabMenuOverlay.webContents.send('tab-menu:close');
+    // Parked off-screen at a real size rather than collapsed to 0x0 — a
+    // zero-size WebContentsView appears to stop compositing updates
+    // entirely while hidden, which silently swallowed the animation-reset
+    // DOM change sent above before it ever got a chance to actually paint;
+    // by the time this reopened, the compositor's last real frame was
+    // still the old fully-visible one. Keeping a real, constant viewport
+    // size — just off the visible window — keeps it rendering normally
+    // the whole time it's "closed".
+    this.tabMenuOverlay.setBounds({ x: -10000, y: -10000, width: TAB_MENU_WIDTH, height: tabMenuHeight(false) });
+  }
+
+  // Resolves whichever view/url a given tab (or, tabId === null, the app's
+  // own primary view) refers to right now. Reads its *live* current page
+  // rather than the stored record, which only reflects the last explicit
+  // navigation (see attachWindowOpenHandler for the same reasoning) —
+  // organic in-tab navigation shouldn't leave these actions acting on a
+  // stale address. Shared by both the URL-field overlay's actions (which
+  // key off whichever chip it's currently open for — see tabMenuContext)
+  // and the plain right-click context menu (which acts on a specific
+  // chip directly, without requiring the overlay to be open or switching
+  // focus to it first — see sidebar index.js's handleChipContextMenu).
+  resolveTarget(appId, tabId) {
+    const view = tabId === null ? this.views.get(appId) : this.tabViews.get(tabId);
+    if (!view) return null;
+    const url = view.webContents.getURL();
+    if (!url) return null;
+    return { appId, tabId, view, url };
+  }
+
+  duplicateTab(appId, tabId) {
+    const target = this.resolveTarget(appId, tabId);
+    if (target) this.openTab(target.appId, { url: target.url });
+  }
+
+  // Pins the tab's current URL as a new, permanent sidebar app and closes
+  // the tab it came from — the content moves to its new home rather than
+  // existing in both places at once. Not offered for the primary view
+  // itself (already a pinned app).
+  async promoteTab(appId, tabId) {
+    const target = this.resolveTarget(appId, tabId);
+    if (!target || target.tabId === null) return;
+
+    const newApp = await configStore.addApp({ url: target.url });
+    this.warmUp([newApp]);
+    this.closeTab(target.appId, target.tabId);
+    this.show(newApp.id, newApp);
+    this.win.webContents.send(APPS_CHANGED);
+  }
+
+  // Swaps a tab and the app's primary view: the tab's page becomes what
+  // the app's own chip shows, and the primary's prior page becomes a new
+  // (dormant, lazily-reloaded) tab in its place — nothing is lost, they
+  // just trade roles. Reuses the existing primary WebContents (navigating
+  // it via loadURL) rather than re-registering the tab's own view under a
+  // new role, since every listener on a view is bound to the id it was
+  // created for (see getOrCreate/getOrCreateTabView) and moving the object
+  // itself would leave those reporting to the wrong place. Doesn't switch
+  // focus to it unless the tab already was focused — this can be invoked
+  // from a right-click without ever having made the tab active.
+  setTabPrimary(appId, tabId) {
+    const target = this.resolveTarget(appId, tabId);
+    if (!target || target.tabId === null) return;
+    const { url: tabUrl } = target;
+
+    const primaryView = this.views.get(appId);
+    if (!primaryView) return;
+    const oldPrimaryUrl = primaryView.webContents.getURL() || configStore.getApp(appId)?.url;
+    const oldMeta = this.meta.get(appId) || {};
+    const wasFocusedOnTab = this.focusedView === this.tabViews.get(tabId);
+
+    configStore.removeTab(appId, tabId);
+    this.tabViews.delete(tabId);
+    if (wasFocusedOnTab) this.focusedView = null;
+
+    if (oldPrimaryUrl) {
+      configStore.addTab(appId, { url: oldPrimaryUrl, title: oldMeta.title, faviconUrl: oldMeta.faviconUrl });
+    }
+
+    primaryView.webContents.loadURL(tabUrl);
+    configStore.updateAppLastUrl(appId, tabUrl);
+    this.emitTabsChanged(appId);
+
+    if (wasFocusedOnTab) {
+      this.activeTabByApp.set(appId, null);
+      this.setFocusedView(primaryView);
+      this.emitActiveChanged();
+      this.emitNavStateForFocused();
+    }
+  }
+
+  openTabExternal(appId, tabId) {
+    const target = this.resolveTarget(appId, tabId);
+    if (target) shell.openExternal(target.url);
+  }
+
+  // The URL-field overlay's own actions — thin wrappers around the above,
+  // keyed off whichever chip it's currently open for (tabMenuContext) and
+  // closing it afterward. Captured before closeTabMenu() clears it.
+  tabMenuNavigate(rawUrl) {
+    const ctx = this.tabMenuContext;
+    this.closeTabMenu();
+    if (!ctx) return;
+    const target = this.resolveTarget(ctx.appId, ctx.tabId);
+    if (target) target.view.webContents.loadURL(configStore.resolveAppUrl(rawUrl));
+  }
+
+  tabMenuDuplicate() {
+    const ctx = this.tabMenuContext;
+    this.closeTabMenu();
+    if (ctx) this.duplicateTab(ctx.appId, ctx.tabId);
+  }
+
+  async tabMenuPromote() {
+    const ctx = this.tabMenuContext;
+    this.closeTabMenu();
+    if (ctx) await this.promoteTab(ctx.appId, ctx.tabId);
+  }
+
+  tabMenuSetPrimary() {
+    const ctx = this.tabMenuContext;
+    this.closeTabMenu();
+    if (ctx) this.setTabPrimary(ctx.appId, ctx.tabId);
+  }
+
+  tabMenuOpenExternal() {
+    const ctx = this.tabMenuContext;
+    this.closeTabMenu();
+    if (ctx) this.openTabExternal(ctx.appId, ctx.tabId);
+  }
+
+  // window.open() (Google's account chooser, SSO redirects, "open in new
+  // tab" links, ...) would otherwise spawn an unmanaged native BrowserWindow
+  // outside the app shell. Auth-flow-like or same-site targets navigate this
+  // same view in place so login completes without leaving it; anything else
+  // is treated as separate content and opens as a new tab under ownerAppId
+  // rather than either hijacking this view or kicking out to the OS browser.
+  // Shared by both a pinned app's own primary view and any tab view, so a
+  // link clicked inside a tab spawns another tab alongside it (flat, not
+  // nested) instead of being judged against the pinned app's own site.
+  attachWindowOpenHandler(view, ownerAppId) {
+    view.webContents.setWindowOpenHandler(({ url, disposition }) => {
+      let parsed;
+      try {
+        parsed = new URL(url);
+      } catch {
+        return { action: 'deny' };
+      }
+      // Page content could window.open() a file:// or custom-protocol URI —
+      // only ever act on ordinary web URLs; anything else is silently
+      // dropped.
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return { action: 'deny' };
+      }
+
+      // A real target="_blank" link (or middle/ctrl-click) always means
+      // "open this as a new tab" — that's the page's own stated intent via
+      // disposition, and it holds regardless of which domain the link
+      // happens to point at. Judging by domain instead breaks e.g. Gmail,
+      // which wraps outbound links through a google.com redirect page
+      // before they reach their real destination: that redirect looks
+      // "same site" as Gmail, so loading it into Gmail's own view (the old
+      // approach here) let its own follow-up redirect hijack Gmail's view
+      // right along with it, instead of landing in its own tab the way it
+      // does in a real browser.
+      if (disposition === 'foreground-tab' || disposition === 'background-tab') {
+        this.openTab(ownerAppId, { url });
+        return { action: 'deny' };
+      }
+
+      // Anything else here is an explicit popup window — window.open(url,
+      // name, 'width=...,height=...') — which is how Google's account
+      // chooser and other OAuth/SSO continuations open. Those are meant to
+      // complete the *current* page's sign-in (and rely on the opener
+      // relationship to do it), not present new content, so same-site or
+      // auth-flow-shaped targets stay in this same view; anything else
+      // still becomes a tab rather than reaching the OS browser.
+      let currentRoot = null;
+      try {
+        currentRoot = rootDomain(new URL(view.webContents.getURL()).hostname);
+      } catch {
+        // no current page yet (e.g. still on the very first load) — fall
+        // through and treat the target as a new site below
+      }
+      const isSameSite = currentRoot !== null && rootDomain(parsed.hostname) === currentRoot;
+      const looksLikeAuth = looksLikeAuthFlow(parsed);
+
+      if (isSameSite || looksLikeAuth) {
+        view.webContents.loadURL(url);
+      } else {
+        this.openTab(ownerAppId, { url });
+      }
+      return { action: 'deny' };
+    });
   }
 
   getOrCreate(app) {
@@ -124,46 +398,7 @@ class ViewManager {
     // time an app is ever opened.
     view.webContents.loadURL(app.lastUrl || app.url);
 
-    // window.open() (Google's account chooser, SSO redirects, "open in new
-    // tab" links, ...) would otherwise spawn an unmanaged native
-    // BrowserWindow outside the app shell. Auth-flow-like or same-provider
-    // targets navigate this same view instead so login completes in place;
-    // anything else is treated as an outbound link and opens in the user's
-    // regular browser.
-    view.webContents.setWindowOpenHandler(({ url }) => {
-      let parsed;
-      try {
-        parsed = new URL(url);
-      } catch {
-        return { action: 'deny' };
-      }
-      // Page content could window.open() a file:// or custom-protocol URI to
-      // reach outside the sandbox (e.g. via shell.openExternal below, which
-      // hands the string straight to the OS). Only ever act on ordinary web
-      // URLs; anything else is silently dropped.
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        return { action: 'deny' };
-      }
-      // Re-read the app's current URL on every check rather than closing
-      // over app.url from when this view was created — an app pinned by
-      // typing a bare search term starts out on a Google search-results
-      // page and "graduates" to its real URL once the user clicks through
-      // (see maybeGraduateFromSearch), which updates the stored app but
-      // wouldn't otherwise be seen by a handler that captured the old,
-      // pre-graduation root domain once and kept it for the view's
-      // lifetime.
-      const currentApp = configStore.getApp(app.id) || app;
-      const appRootDomain = rootDomain(new URL(currentApp.url).hostname);
-      const isSameProvider = rootDomain(parsed.hostname) === appRootDomain;
-      const looksLikeAuth = looksLikeAuthFlow(parsed);
-
-      if (isSameProvider || looksLikeAuth) {
-        view.webContents.loadURL(url);
-      } else {
-        shell.openExternal(url);
-      }
-      return { action: 'deny' };
-    });
+    this.attachWindowOpenHandler(view, app.id);
 
     view.webContents.on('page-favicon-updated', (event, favicons) => {
       this.updateMeta(app.id, { faviconUrl: favicons[0] || null });
@@ -177,13 +412,62 @@ class ViewManager {
     }
 
     view.webContents.on('did-navigate', (event, url) => {
-      this.emitNavState(app.id);
+      if (this.focusedView === view) this.emitNavStateForFocused();
       this.maybeGraduateFromSearch(app.id, url);
       configStore.updateAppLastUrl(app.id, url);
     });
-    view.webContents.on('did-navigate-in-page', () => this.emitNavState(app.id));
+    view.webContents.on('did-navigate-in-page', () => {
+      if (this.focusedView === view) this.emitNavStateForFocused();
+    });
 
     this.views.set(app.id, view);
+    return view;
+  }
+
+  // Lazily creates a tab's view on first visit (see showTab) — a tab
+  // restored from disk on launch is just its url/title/favicon until then,
+  // with no browser process behind it at all.
+  getOrCreateTabView(appId, tab) {
+    if (this.tabViews.has(tab.id)) return this.tabViews.get(tab.id);
+
+    const app = configStore.getApp(appId);
+    const view = new WebContentsView({
+      webPreferences: {
+        // Shares the parent app's session rather than getting its own —
+        // this is content reached *from* that app (a tracking link in an
+        // email, say), so any login state it needs should already be
+        // there, and it's not worth scattering more persisted partitions
+        // on disk for what's usually a one-off page.
+        session: getSessionForApp(app, this.win),
+        preload: path.join(__dirname, '..', 'preload', 'webview-preload.js'),
+        contextIsolation: true,
+        sandbox: true,
+      },
+    });
+    view.webContents.setUserAgent(DESKTOP_USER_AGENT);
+    view.webContents.loadURL(tab.url);
+
+    this.attachWindowOpenHandler(view, appId);
+
+    view.webContents.on('page-favicon-updated', (event, favicons) => {
+      this.updateTabMeta(appId, tab.id, { faviconUrl: favicons[0] || null });
+    });
+    view.webContents.on('page-title-updated', (event, title) => {
+      this.updateTabMeta(appId, tab.id, { title });
+    });
+    view.webContents.on('did-navigate', (event, url) => {
+      if (this.focusedView === view) this.emitNavStateForFocused();
+      // Keeps the stored record current for organic in-tab navigation (not
+      // just the address-bar edit in tabMenuNavigate), so e.g. a dormant
+      // tab restored after relaunch reopens wherever it was actually left,
+      // not just where it started.
+      this.updateTabMeta(appId, tab.id, { url });
+    });
+    view.webContents.on('did-navigate-in-page', () => {
+      if (this.focusedView === view) this.emitNavStateForFocused();
+    });
+
+    this.tabViews.set(tab.id, view);
     return view;
   }
 
@@ -206,38 +490,31 @@ class ViewManager {
     configStore.updateAppUrl(appId, newUrl);
   }
 
-  emitNavState(appId) {
-    const view = this.views.get(appId);
-    if (!view) return;
-    const { navigationHistory } = view.webContents;
+  emitNavStateForFocused() {
+    if (!this.focusedView) return;
+    const { navigationHistory } = this.focusedView.webContents;
     this.win.webContents.send(NAV_STATE_CHANGED, {
-      appId,
       canGoBack: navigationHistory.canGoBack(),
       canGoForward: navigationHistory.canGoForward(),
     });
   }
 
   navBack() {
-    const view = this.views.get(this.activeId);
-    view?.webContents.navigationHistory.goBack();
+    this.focusedView?.webContents.navigationHistory.goBack();
   }
 
   navForward() {
-    const view = this.views.get(this.activeId);
-    view?.webContents.navigationHistory.goForward();
+    this.focusedView?.webContents.navigationHistory.goForward();
   }
 
   navReload() {
-    const view = this.views.get(this.activeId);
-    view?.webContents.reload();
+    this.focusedView?.webContents.reload();
   }
 
   getNavState() {
-    const view = this.views.get(this.activeId);
-    if (!view) return { appId: null, canGoBack: false, canGoForward: false };
-    const { navigationHistory } = view.webContents;
+    if (!this.focusedView) return { canGoBack: false, canGoForward: false };
+    const { navigationHistory } = this.focusedView.webContents;
     return {
-      appId: this.activeId,
       canGoBack: navigationHistory.canGoBack(),
       canGoForward: navigationHistory.canGoForward(),
     };
@@ -245,7 +522,8 @@ class ViewManager {
 
   // Create (and start loading) every configured app's view up front so
   // sidebar favicons/titles are available without requiring a click first.
-  // Only one view is ever attached/visible at a time — see show().
+  // Only one view is ever attached/visible at a time — see show(). Tabs are
+  // deliberately not warmed up here; they stay dormant until visited.
   warmUp(apps) {
     apps.forEach((app) => this.getOrCreate(app));
   }
@@ -277,18 +555,111 @@ class ViewManager {
     return this.unread.get(appId) || 0;
   }
 
-  show(appId, app) {
-    const view = this.getOrCreate(app);
-    if (this.activeId && this.activeId !== appId) {
-      this.win.contentView.removeChildView(this.views.get(this.activeId));
+  updateTabMeta(appId, tabId, partial) {
+    configStore.updateTab(appId, tabId, partial);
+    this.emitTabsChanged(appId);
+  }
+
+  emitTabsChanged(appId) {
+    this.win.webContents.send(TABS_CHANGED, { appId, tabs: configStore.getTabs(appId) });
+  }
+
+  reorderTabs(appId, tabIds) {
+    configStore.reorderTabs(appId, tabIds);
+    this.emitTabsChanged(appId);
+  }
+
+  emitActiveChanged() {
+    this.win.webContents.send(ACTIVE_VIEW_CHANGED, {
+      appId: this.activeId,
+      tabId: this.activeId ? this.activeTabByApp.get(this.activeId) ?? null : null,
+    });
+  }
+
+  // Attaches `view` as the one visible content view, detaching whatever was
+  // focused before. Shared by every path that changes what's on screen
+  // (switching pinned apps, switching tabs, opening a new one, closing the
+  // focused one) so there's a single place that owns the attach/detach and
+  // layering, rather than each of those duplicating it.
+  setFocusedView(view) {
+    if (this.focusedView !== view) {
+      // Anchored to a specific tab's chip — stale once focus moves anywhere
+      // else, including a tabMenu action itself already having closed it.
+      this.closeTabMenu();
     }
-    if (this.activeId !== appId) {
+    if (this.focusedView && this.focusedView !== view) {
+      this.win.contentView.removeChildView(this.focusedView);
+    }
+    if (this.focusedView !== view) {
       this.win.contentView.addChildView(view);
     }
     this.layout(view);
     this.raiseOverlays();
+    this.focusedView = view;
+  }
+
+  // Switching to a pinned app restores whichever of its tabs (or its own
+  // primary view) was last focused, rather than always resetting to the
+  // primary view — matches a browser window remembering which tab you were
+  // on when you switch back to it.
+  show(appId, app) {
+    const tabId = this.activeTabByApp.get(appId) ?? null;
+    if (tabId) {
+      const tab = (configStore.getApp(appId)?.tabs || []).find((t) => t.id === tabId);
+      if (tab) {
+        this.showTab(appId, tab);
+        return;
+      }
+      this.activeTabByApp.delete(appId); // stale reference (tab closed elsewhere) — fall through
+    }
+
+    const view = this.getOrCreate(app);
+    this.setFocusedView(view);
     this.activeId = appId;
-    this.emitNavState(appId);
+    this.emitActiveChanged();
+    this.emitNavStateForFocused();
+  }
+
+  showTab(appId, tab) {
+    const view = this.getOrCreateTabView(appId, tab);
+    this.setFocusedView(view);
+    this.activeId = appId;
+    this.activeTabByApp.set(appId, tab.id);
+    this.emitActiveChanged();
+    this.emitNavStateForFocused();
+  }
+
+  showAppPrimary(appId) {
+    this.activeTabByApp.set(appId, null);
+    const app = configStore.getApp(appId);
+    if (app) this.show(appId, app);
+  }
+
+  // A link that isn't the same site as (and doesn't look like an auth hop
+  // from) the view it was clicked in — see attachWindowOpenHandler.
+  openTab(appId, { url }) {
+    const tab = configStore.addTab(appId, { url, title: url, faviconUrl: null });
+    this.emitTabsChanged(appId);
+    this.showTab(appId, tab);
+  }
+
+  closeTab(appId, tabId) {
+    if (this.tabMenuContext?.tabId === tabId) this.closeTabMenu();
+
+    const view = this.tabViews.get(tabId);
+    const wasFocused = this.focusedView === view;
+
+    if (wasFocused) {
+      this.activeTabByApp.set(appId, null);
+      const app = configStore.getApp(appId);
+      if (app) this.setFocusedView(this.getOrCreate(app));
+    }
+
+    if (view) this.tabViews.delete(tabId);
+    configStore.removeTab(appId, tabId);
+    this.emitActiveChanged();
+    this.emitTabsChanged(appId);
+    if (wasFocused) this.emitNavStateForFocused();
   }
 
   layout(view) {
@@ -306,27 +677,42 @@ class ViewManager {
   // page, so full-window sidebar UI (dialogs, etc.) needs the active view
   // detached first or it'll be covered everywhere but the sidebar strip.
   hideActive() {
-    if (this.activeId) this.win.contentView.removeChildView(this.views.get(this.activeId));
+    if (this.focusedView) this.win.contentView.removeChildView(this.focusedView);
   }
 
   showActive() {
-    if (!this.activeId) return;
-    const view = this.views.get(this.activeId);
-    this.win.contentView.addChildView(view);
-    this.layout(view);
+    if (!this.focusedView) return;
+    this.win.contentView.addChildView(this.focusedView);
+    this.layout(this.focusedView);
     this.raiseOverlays();
   }
 
   // WebContentsView has no explicit destroy() — dropping the last reference
   // (after detaching it here) is what lets Electron tear down its WebContents.
   destroy(appId) {
+    if (this.tabMenuContext?.appId === appId) this.closeTabMenu();
+
     const view = this.views.get(appId);
-    if (!view) return;
-    if (this.activeId === appId) {
-      this.win.contentView.removeChildView(view);
-      this.activeId = null;
+    if (view) {
+      if (this.focusedView === view) {
+        this.win.contentView.removeChildView(view);
+        this.focusedView = null;
+      }
+      this.views.delete(appId);
     }
-    this.views.delete(appId);
+
+    for (const tab of configStore.getTabs(appId)) {
+      const tabView = this.tabViews.get(tab.id);
+      if (!tabView) continue;
+      if (this.focusedView === tabView) {
+        this.win.contentView.removeChildView(tabView);
+        this.focusedView = null;
+      }
+      this.tabViews.delete(tab.id);
+    }
+    this.activeTabByApp.delete(appId);
+
+    if (this.activeId === appId) this.activeId = null;
     this.meta.delete(appId);
     this.unread.delete(appId);
   }

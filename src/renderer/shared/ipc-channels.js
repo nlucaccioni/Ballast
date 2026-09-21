@@ -24,4 +24,13 @@ module.exports = {
   NAV_RELOAD: 'view:nav-reload',
   NAV_STATE_CHANGED: 'view:nav-state-changed', // main -> renderer push
   NAV_GET_STATE: 'view:get-nav-state', // renderer -> main, for initial state on load
+  SWITCH_TAB: 'tabs:switch', // renderer -> main; tabId null means the app's own primary view
+  CLOSE_TAB: 'tabs:close', // renderer -> main
+  REORDER_TABS: 'tabs:reorder', // renderer -> main, drag-to-reorder the secondary tabs
+  TABS_CHANGED: 'tabs:changed', // main -> renderer push (a tab opened/closed, or one's title/favicon updated)
+  ACTIVE_VIEW_CHANGED: 'view:active-changed', // main -> renderer push, e.g. a link click opened a new tab
+  OPEN_TAB_MENU: 'tab-menu:show', // sidebar -> main, clicking an already-active tab chip
+  CLOSE_TAB_MENU: 'tab-menu:hide', // sidebar -> main
+  OPEN_TAB_CONTEXT_MENU: 'tabs:context-menu', // sidebar -> main, right-clicking a chip (any chip, active or not)
+  APPS_CHANGED: 'app:list-changed', // main -> renderer push; a new app was pinned outside a direct sidebar request (see ViewManager.tabMenuPromote)
 };

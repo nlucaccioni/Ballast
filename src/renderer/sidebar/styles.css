@@ -89,6 +89,125 @@ body {
   cursor: default;
 }
 
+/* Starts right after #nav-controls (3 buttons * 32px + 2 * 2px gap = 100px)
+   and stops short of the right edge to leave room for the OS window
+   controls titleBarOverlay draws there. */
+#tab-strip {
+  position: absolute;
+  left: calc(var(--sidebar-width) + 100px + 8px);
+  right: 140px;
+  top: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  /* Deliberately left as the inherited "drag" from #titlebar — only the
+     chip buttons themselves opt out below, so the empty space around and
+     between them (most of this container, most of the time) still drags
+     the window, the same as clicking empty titlebar space next to a tab
+     in a real browser. */
+}
+
+.tab-chip {
+  flex-shrink: 0; /* the primary chip: always full size, never part of the shrink-to-fit group below */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 160px;
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #aaa;
+  font-size: 12px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.tab-chip:hover {
+  background: #2a2a2a;
+}
+
+.tab-chip.active {
+  background: #333;
+  color: #e8e8e8;
+}
+
+/* Secondary tabs shrink together (like real browser tabs) once there are
+   enough of them to fill the strip, instead of overflowing past it — the
+   active one shrinks less (a smaller flex-shrink and a taller min-width)
+   so it stays a bit larger and always has room for its close button. */
+.tab-chip-secondary {
+  flex: 1 1 140px;
+  min-width: 44px;
+}
+
+.tab-chip-secondary.active {
+  flex-shrink: 0.4;
+  min-width: 70px;
+}
+
+.tab-chip .tab-chip-favicon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  -webkit-user-drag: none;
+}
+
+.tab-chip .tab-chip-title {
+  min-width: 0; /* lets this shrink below its content's natural width so ellipsis can kick in, instead of forcing the chip wider */
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-chip .tab-chip-close {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  color: #888;
+}
+
+/* Only the active tab's close button always shows — an inactive one only
+   reveals it on hover, so a title has the full chip width to itself
+   otherwise. Real browsers do the same once there are enough tabs open
+   that every bit of width matters. */
+.tab-chip-secondary:not(.active) .tab-chip-close {
+  display: none;
+}
+
+.tab-chip-secondary:not(.active):hover .tab-chip-close {
+  display: flex;
+}
+
+.tab-chip.dragging {
+  opacity: 0.4;
+}
+
+/* Only ever inserted between the primary chip and the tab list — see
+   renderTabStrip — so its own presence already implies there's at least
+   one tab open; no separate hidden state to manage. */
+.tab-strip-separator {
+  flex-shrink: 0;
+  width: 1px;
+  height: 18px;
+  background: #404040;
+  margin: 0 2px;
+}
+
+.tab-chip .tab-chip-close:hover {
+  background: #444;
+  color: #fff;
+}
+
 /* Sit exactly in the 1px gap main/view-manager.js insets the webview's
    bounds by, reading as a border around a view CSS can't otherwise style.
    Offset by --corner-box-size so they start right where the corner mask's

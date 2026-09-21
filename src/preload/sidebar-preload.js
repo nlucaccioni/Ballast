@@ -41,6 +41,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('view:nav-state-changed', listener);
     return () => ipcRenderer.removeListener('view:nav-state-changed', listener);
   },
+  switchTab: (appId, tabId) => ipcRenderer.invoke('tabs:switch', { appId, tabId }),
+  closeTab: (appId, tabId) => ipcRenderer.invoke('tabs:close', { appId, tabId }),
+  reorderTabs: (appId, tabIds) => ipcRenderer.invoke('tabs:reorder', { appId, tabIds }),
+  onTabsChanged: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('tabs:changed', listener);
+    return () => ipcRenderer.removeListener('tabs:changed', listener);
+  },
+  onActiveViewChanged: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('view:active-changed', listener);
+    return () => ipcRenderer.removeListener('view:active-changed', listener);
+  },
   onUnreadChanged: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('app:unread-changed', listener);
@@ -50,5 +63,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('app:meta-changed', listener);
     return () => ipcRenderer.removeListener('app:meta-changed', listener);
+  },
+  openTabMenu: (appId, tabId, position) =>
+    ipcRenderer.send('tab-menu:show', { appId, tabId, x: position.x, y: position.y }),
+  closeTabMenu: () => ipcRenderer.send('tab-menu:hide'),
+  openTabContextMenu: (appId, tabId, position) =>
+    ipcRenderer.send('tabs:context-menu', { appId, tabId, x: position.x, y: position.y }),
+  onAppsChanged: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('app:list-changed', listener);
+    return () => ipcRenderer.removeListener('app:list-changed', listener);
   },
 });

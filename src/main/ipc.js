@@ -29,8 +29,10 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
 
   ipcMain.handle(channels.REMOVE_APP, (event, appId) => {
     const wasActive = viewManager.activeId === appId;
-    configStore.removeApp(appId);
+    // destroy() looks up this app's open tabs to tear them down too — it
+    // has to run before the app record (and those tabs with it) is deleted.
     viewManager.destroy(appId);
+    configStore.removeApp(appId);
 
     let newActiveId = null;
     if (wasActive) {
@@ -100,6 +102,56 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
   ipcMain.on(channels.NAV_FORWARD, () => viewManager.navForward());
   ipcMain.on(channels.NAV_RELOAD, () => viewManager.navReload());
   ipcMain.handle(channels.NAV_GET_STATE, () => viewManager.getNavState());
+
+  ipcMain.handle(channels.SWITCH_TAB, (event, { appId, tabId }) => {
+    if (!tabId) {
+      viewManager.showAppPrimary(appId);
+      return {};
+    }
+    const tab = configStore.getTabs(appId).find((t) => t.id === tabId);
+    if (tab) viewManager.showTab(appId, tab);
+    return {};
+  });
+
+  ipcMain.handle(channels.CLOSE_TAB, (event, { appId, tabId }) => {
+    viewManager.closeTab(appId, tabId);
+    return {};
+  });
+
+  ipcMain.handle(channels.REORDER_TABS, (event, { appId, tabIds }) => {
+    viewManager.reorderTabs(appId, tabIds);
+    return {};
+  });
+
+  ipcMain.on(channels.OPEN_TAB_MENU, (event, { appId, tabId, x, y }) => viewManager.openTabMenu(appId, tabId, x, y));
+  ipcMain.on(channels.CLOSE_TAB_MENU, () => viewManager.closeTabMenu());
+
+  // Plain OS right-click menu — doesn't switch focus to the chip first,
+  // unlike the URL-field overlay above (which needs to be looking at a
+  // live view to show its current address).
+  ipcMain.on(channels.OPEN_TAB_CONTEXT_MENU, (event, { appId, tabId, x, y }) => {
+    const isPrimary = !tabId;
+    const contextMenu = Menu.buildFromTemplate([
+      { label: 'Duplicate tab', click: () => viewManager.duplicateTab(appId, tabId) },
+      ...(isPrimary
+        ? []
+        : [
+            { label: 'Open as new app', click: () => viewManager.promoteTab(appId, tabId) },
+            { label: 'Set as primary', click: () => viewManager.setTabPrimary(appId, tabId) },
+          ]),
+      { label: 'Open in default browser', click: () => viewManager.openTabExternal(appId, tabId) },
+    ]);
+    contextMenu.popup({ window: mainWindow, x, y });
+  });
+
+  // These come from the tab-menu overlay's own preload (tab-menu-preload.js),
+  // which inlines its channel names rather than requiring shared/ipc-channels
+  // (see tooltip-preload.js for why) — not from channels.* above.
+  ipcMain.on('tab-menu:navigate', (event, url) => viewManager.tabMenuNavigate(url));
+  ipcMain.on('tab-menu:duplicate', () => viewManager.tabMenuDuplicate());
+  ipcMain.on('tab-menu:promote', () => viewManager.tabMenuPromote());
+  ipcMain.on('tab-menu:set-primary', () => viewManager.tabMenuSetPrimary());
+  ipcMain.on('tab-menu:open-external', () => viewManager.tabMenuOpenExternal());
 
   // REPORT_UNREAD handler lands in a later step (unread-tracker.js).
 }
