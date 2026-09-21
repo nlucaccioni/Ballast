@@ -1,0 +1,29 @@
+{
+  "groups": [],
+  "apps": [
+    {
+      "id": "gmail",
+      "name": "Gmail",
+      "url": "https://mail.google.com/mail/u/0/",
+      "icon": "gmail.png",
+      "partition": "persist:google.com",
+      "unreadStrategy": "title-count"
+    },
+    {
+      "id": "slack",
+      "name": "Slack",
+      "url": "https://app.slack.com/client",
+      "icon": "slack.png",
+      "partition": "persist:slack.com",
+      "unreadStrategy": "title-count"
+    },
+    {
+      "id": "gcal",
+      "name": "Google Calendar",
+      "url": "https://calendar.google.com/calendar/u/0/r",
+      "icon": "gcal.png",
+      "partition": "persist:google.com",
+      "unreadStrategy": "title-count"
+    }
+  ]
+}

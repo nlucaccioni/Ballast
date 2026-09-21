@@ -1,0 +1,282 @@
+/* Placeholder styling only — this whole sidebar gets replaced by the
+   Figma-driven redesign (see spec section 9, step 7). Not worth polishing. */
+
+:root {
+  --titlebar-height: 36px; /* must match TITLEBAR_HEIGHT in main/view-manager.js */
+  --sidebar-width: 46px; /* must match SIDEBAR_WIDTH in main/view-manager.js */
+}
+
+body {
+  margin: 0;
+  font-family: sans-serif;
+  background: #1e1e1e;
+}
+
+/* Custom replacement for the native titlebar (see main/index.js's
+   titleBarStyle: 'hidden'): OS window controls still render themselves in
+   the top-right via titleBarOverlay, this just supplies the drag region
+   and hamburger button in what's left. */
+#titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--titlebar-height);
+  display: flex;
+  align-items: center;
+  background: #1e1e1e;
+  -webkit-app-region: drag;
+}
+
+.icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+#hamburger-button {
+  -webkit-app-region: no-drag;
+  width: 36px;
+  height: var(--titlebar-height);
+  border: none;
+  background: transparent;
+  color: #e8e8e8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Aligned to the right edge of the sidebar, not to the hamburger button —
+   this is the start of the "active window" area above the WebContentsView. */
+#nav-controls {
+  position: absolute;
+  left: var(--sidebar-width);
+  top: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+#nav-controls button {
+  width: 32px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #e8e8e8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#nav-controls .icon {
+  width: 15px;
+  height: 15px;
+}
+
+#nav-controls button:hover:not(:disabled) {
+  background: #333;
+}
+
+#nav-controls button:disabled {
+  color: #555;
+  cursor: default;
+}
+
+#sidebar {
+  position: fixed;
+  top: var(--titlebar-height);
+  left: 0;
+  width: var(--sidebar-width);
+  height: calc(100vh - var(--titlebar-height));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-top: 4px;
+  box-sizing: border-box;
+  background: #1e1e1e;
+}
+
+.app-button {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.app-button:hover {
+  background: #333;
+}
+
+.app-button.active {
+  background: #4a4a4a;
+}
+
+.app-button.dragging {
+  opacity: 0.4;
+}
+
+.app-favicon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  -webkit-user-drag: none;
+}
+
+.app-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 2px;
+  border-radius: 9px;
+  background: #e74c3c;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+/* Drag-to-reorder shows this bar *between* items instead of highlighting
+   an item's own edge. Positioned via fixed top/left/width set in JS from
+   the target's own rect — deliberately NOT a real flex sibling, since
+   inserting one into the list would shift later items mid-drag. */
+.drop-indicator {
+  position: fixed;
+  height: 2px;
+  border-radius: 1px;
+  background: #4a90e2;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Drag-to-group still highlights the target directly — it's a "drop onto
+   this" gesture, not a "drop between" one. */
+.drop-merge {
+  outline: 2px solid #4a90e2;
+  outline-offset: 1px;
+}
+
+/* Wraps every top-level sidebar item — a lone app or a real multi-app
+   group alike (see index.js's buildContainer) — so app buttons render
+   identically either way; nothing here overrides their size. */
+.app-group {
+  position: relative;
+  width: 36px;
+  box-sizing: border-box;
+  padding: 2px;
+  border-radius: 8px;
+  background: #2a2a2a;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-group.dragging {
+  opacity: 0.4;
+}
+
+#app-tooltip {
+  position: fixed;
+  z-index: 1000;
+  transform: translateY(-50%);
+  background: #2a2a2a;
+  color: #eee;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+#add-app-button {
+  width: 32px;
+  height: 32px;
+  border: 1px dashed #555;
+  border-radius: 7px;
+  background: transparent;
+  color: #aaa;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#add-app-button .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.add-app-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.add-app-form {
+  background: #2a2a2a;
+  padding: 16px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 260px;
+  color: #eee;
+  font-size: 13px;
+}
+
+.add-app-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.add-app-form input {
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid #555;
+  background: #1e1e1e;
+  color: #eee;
+}
+
+.add-app-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.add-app-actions button {
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+}
+
+.add-app-actions button[type='submit'] {
+  background: #4a90e2;
+  color: #fff;
+}

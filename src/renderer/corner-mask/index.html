@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Corner mask</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+      }
+      /* Concave-corner trick: pixels within `radius` of the bottom-right
+         corner stay transparent (revealing the real content view behind
+         this overlay); everything beyond that arc is painted chrome-dark,
+         masking the content view's actual hard-cornered edge. */
+      .mask {
+        width: 100%;
+        height: 100%;
+        background: radial-gradient(circle at bottom right, transparent 7px, #1e1e1e 7px);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="mask"></div>
+  </body>
+</html>
