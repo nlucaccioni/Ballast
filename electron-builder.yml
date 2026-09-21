@@ -16,7 +16,13 @@ publish:
   provider: github
   owner: nlucaccioni
   repo: ballast
-  releaseType: release
+  # Left as a draft here on purpose: each platform leg in release.yml
+  # uploads its own assets to this same draft in turn, and a final step
+  # publishes it only once every leg has finished. Publishing immediately
+  # per-leg (releaseType: release) closes the release out after the first
+  # leg, so the next leg finds nothing to attach to and creates a second,
+  # incomplete one instead.
+  releaseType: draft
 
 # No custom icon yet (see assets/icons/) — electron-builder falls back to a
 # default icon on each platform, which is fine to ship with for now; drop
