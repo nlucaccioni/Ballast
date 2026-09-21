@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { net } = require('electron');
 const Store = require('electron-store');
-const { rootDomain } = require('./url-utils');
+const { rootDomain, looksLikeAuthFlow } = require('./url-utils');
 
 const seedPath = path.join(__dirname, '..', '..', 'config', 'default-apps.json');
 const seed = JSON.parse(fs.readFileSync(seedPath, 'utf-8'));
@@ -109,6 +109,26 @@ function resolveFinalUrl(url, timeoutMs = 4000) {
     }
 
     request.on('redirect', (statusCode, method, redirectUrl) => {
+      // A redirect landing on what looks like a third-party identity
+      // provider means the app needs sign-in, not that the identity
+      // provider IS the app — e.g. an SSO-only Slack workspace 302s an
+      // unauthenticated request through to accounts.google.com before ever
+      // reaching Slack's own URL. Stop and keep whatever we'd resolved to
+      // so far instead of following into it, or the app ends up pinned,
+      // identified, and session-partitioned as the identity provider.
+      let parsedRedirect;
+      try {
+        parsedRedirect = new URL(redirectUrl);
+      } catch {
+        request.abort();
+        finish(finalUrl);
+        return;
+      }
+      if (looksLikeAuthFlow(parsedRedirect)) {
+        request.abort();
+        finish(finalUrl);
+        return;
+      }
       finalUrl = redirectUrl;
       request.followRedirect();
     });

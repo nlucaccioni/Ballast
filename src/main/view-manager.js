@@ -1,7 +1,7 @@
 const { WebContentsView, shell } = require('electron');
 const path = require('path');
 const { getSessionForApp } = require('./session-manager');
-const { rootDomain } = require('./url-utils');
+const { rootDomain, looksLikeAuthFlow } = require('./url-utils');
 const { watchTitleCount } = require('./unread-tracker');
 const configStore = require('./config-store');
 const { APP_META_CHANGED, NAV_STATE_CHANGED, UNREAD_CHANGED } = require('../renderer/shared/ipc-channels');
@@ -24,11 +24,6 @@ const CORNER_BOX_SIZE = CORNER_RADIUS + BORDER_WIDTH;
 // fit), so this only needs to be large enough for realistic titles.
 const TOOLTIP_WIDTH = 260;
 const TOOLTIP_HEIGHT = 24;
-
-// Hostnames that look like an identity provider (accounts.google.com,
-// login.microsoftonline.com, ...) even when they're on a different root
-// domain than the app itself — covers third-party/federated SSO.
-const AUTH_SUBDOMAIN_PATTERN = /^(accounts|login|signin|auth|sso|id)\./i;
 
 // Electron's default UA appends "Electron/x.y.z", which is exactly what
 // sites like WhatsApp Web and Teams sniff for to show an "unsupported
@@ -135,7 +130,6 @@ class ViewManager {
     // targets navigate this same view instead so login completes in place;
     // anything else is treated as an outbound link and opens in the user's
     // regular browser.
-    const appRootDomain = rootDomain(new URL(app.url).hostname);
     view.webContents.setWindowOpenHandler(({ url }) => {
       let parsed;
       try {
@@ -150,10 +144,18 @@ class ViewManager {
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
         return { action: 'deny' };
       }
-      const targetHost = parsed.hostname;
-
-      const isSameProvider = rootDomain(targetHost) === appRootDomain;
-      const looksLikeAuth = AUTH_SUBDOMAIN_PATTERN.test(targetHost);
+      // Re-read the app's current URL on every check rather than closing
+      // over app.url from when this view was created — an app pinned by
+      // typing a bare search term starts out on a Google search-results
+      // page and "graduates" to its real URL once the user clicks through
+      // (see maybeGraduateFromSearch), which updates the stored app but
+      // wouldn't otherwise be seen by a handler that captured the old,
+      // pre-graduation root domain once and kept it for the view's
+      // lifetime.
+      const currentApp = configStore.getApp(app.id) || app;
+      const appRootDomain = rootDomain(new URL(currentApp.url).hostname);
+      const isSameProvider = rootDomain(parsed.hostname) === appRootDomain;
+      const looksLikeAuth = looksLikeAuthFlow(parsed);
 
       if (isSameProvider || looksLikeAuth) {
         view.webContents.loadURL(url);

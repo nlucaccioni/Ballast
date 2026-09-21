@@ -15,6 +15,21 @@ const updater = require('./updater');
 // button (a user action, not page-load) is unaffected.
 app.commandLine.appendSwitch('disable-features', 'WebAuthenticationConditionalMediation');
 
+// Without this, every launch (a second double-click of the installed app,
+// running `npm start` while a packaged build is already open, ...) spawns
+// a brand new process pointed at the same userData directory instead of
+// reusing the one already running — and since every pinned app's session
+// partition lives under that same directory, multiple processes fighting
+// over the same cache/IndexedDB/lock files there is what produces things
+// like "Unable to move the cache" errors and pages failing to load
+// correctly. Bail out immediately if another instance already holds the
+// lock; that instance's 'second-instance' handler below focuses its
+// window instead.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
+
 let mainWindow;
 
 // Placeholder menu contents — just enough to reload/inspect/quit while
@@ -70,6 +85,12 @@ function createWindow() {
   // actually something new.
   setTimeout(() => updater.checkForUpdates({ silent: true }), 10_000);
 }
+
+app.on('second-instance', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+});
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
