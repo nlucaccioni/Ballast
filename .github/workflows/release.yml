@@ -16,6 +16,12 @@ jobs:
   build:
     strategy:
       fail-fast: false
+      # electron-builder's GitHub publisher looks up (or creates) the
+      # release for this tag on each run; two legs publishing at once can
+      # both find nothing and each create their own draft, splitting the
+      # assets across two releases. Running one at a time means the second
+      # leg finds what the first already created and adds to it instead.
+      max-parallel: 1
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}

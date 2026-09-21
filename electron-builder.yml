@@ -16,6 +16,7 @@ publish:
   provider: github
   owner: nlucaccioni
   repo: ballast
+  releaseType: release
 
 # No custom icon yet (see assets/icons/) — electron-builder falls back to a
 # default icon on each platform, which is fine to ship with for now; drop
