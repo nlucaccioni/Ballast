@@ -117,7 +117,7 @@ class ViewManager {
 
     const view = new WebContentsView({
       webPreferences: {
-        session: getSessionForApp(app),
+        session: getSessionForApp(app, this.win),
         preload: path.join(__dirname, '..', 'preload', 'webview-preload.js'),
         contextIsolation: true,
         sandbox: true,
@@ -137,12 +137,20 @@ class ViewManager {
     // regular browser.
     const appRootDomain = rootDomain(new URL(app.url).hostname);
     view.webContents.setWindowOpenHandler(({ url }) => {
-      let targetHost;
+      let parsed;
       try {
-        targetHost = new URL(url).hostname;
+        parsed = new URL(url);
       } catch {
         return { action: 'deny' };
       }
+      // Page content could window.open() a file:// or custom-protocol URI to
+      // reach outside the sandbox (e.g. via shell.openExternal below, which
+      // hands the string straight to the OS). Only ever act on ordinary web
+      // URLs; anything else is silently dropped.
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return { action: 'deny' };
+      }
+      const targetHost = parsed.hostname;
 
       const isSameProvider = rootDomain(targetHost) === appRootDomain;
       const looksLikeAuth = AUTH_SUBDOMAIN_PATTERN.test(targetHost);

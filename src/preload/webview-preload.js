@@ -12,28 +12,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
 // One targeted exception to "don't touch navigator": Google's login page
 // (and others) probes for a platform passkey authenticator the moment it
-// loads, and Electron appears to escalate that straight to the native
-// Windows Security dialog rather than staying silent the way a fully
-// WebAuthn-conditional-UI-capable browser would (disabling the
-// WebAuthenticationConditionalMediation Chromium feature didn't stop it).
-// We don't support in-app passkey login, so just report no platform
-// authenticator is available — sites fall back to their normal
-// password/2FA flow instead. contextBridge.executeInMainWorld is needed
-// (not a plain assignment here) because this preload's own `window` is a
-// separate, isolated-world object from the page's — see contextIsolation.
+// loads, via WebAuthn's *conditional* mediation (silent autofill-style
+// discovery, no user action) — and Electron appears to escalate that
+// straight to the native Windows Security dialog rather than staying quiet
+// the way a browser with full conditional-UI support would (disabling the
+// WebAuthenticationConditionalMediation Chromium feature alone didn't stop
+// it). Only that silent path is blocked here; an explicit passkey sign-in
+// the user actually triggers (a real "use a passkey" button, mediation not
+// set to 'conditional') is left completely alone. contextBridge
+// .executeInMainWorld is needed (not a plain assignment here) because this
+// preload's own `window` is a separate, isolated-world object from the
+// page's — see contextIsolation.
 contextBridge.executeInMainWorld({
   func: () => {
-    if (window.PublicKeyCredential) {
-      window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);
-      if (window.PublicKeyCredential.isConditionalMediationAvailable) {
-        window.PublicKeyCredential.isConditionalMediationAvailable = () => Promise.resolve(false);
-      }
-    }
     if (navigator.credentials) {
       const originalGet = navigator.credentials.get.bind(navigator.credentials);
       navigator.credentials.get = (options) => {
-        if (options && options.publicKey) {
-          return Promise.reject(new DOMException('WebAuthn is disabled in this app', 'NotAllowedError'));
+        if (options && options.publicKey && options.mediation === 'conditional') {
+          return Promise.reject(new DOMException('Conditional WebAuthn mediation is disabled in this app', 'NotAllowedError'));
         }
         return originalGet(options);
       };

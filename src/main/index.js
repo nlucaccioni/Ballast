@@ -3,6 +3,7 @@ const path = require('path');
 const ViewManager = require('./view-manager');
 const { registerIpcHandlers } = require('./ipc');
 const configStore = require('./config-store');
+const updater = require('./updater');
 
 // Google's login page (and others) proactively probe for available
 // passkeys the moment it loads, via WebAuthn's "conditional UI" — in a
@@ -20,6 +21,8 @@ let mainWindow;
 // iterating. Opened from the sidebar's hamburger button instead of a menu
 // bar; see index.js's OPEN_APP_MENU handler in ipc.js.
 const appMenu = Menu.buildFromTemplate([
+  { label: 'Check for Updates...', click: () => updater.checkForUpdates({ silent: false }) },
+  { type: 'separator' },
   { role: 'reload' },
   { role: 'forceReload' },
   { role: 'toggleDevTools' },
@@ -60,6 +63,12 @@ function createWindow() {
   viewManager.warmUp(apps);
   const firstApp = configStore.getFirstApp();
   if (firstApp) viewManager.show(firstApp.id, firstApp);
+
+  updater.init(mainWindow);
+  // Delayed so it never competes with initial app/favicon loading for
+  // bandwidth or attention; silent, so it only shows UI if there's
+  // actually something new.
+  setTimeout(() => updater.checkForUpdates({ silent: true }), 10_000);
 }
 
 app.whenReady().then(() => {
