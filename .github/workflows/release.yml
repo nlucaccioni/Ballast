@@ -13,15 +13,27 @@ permissions:
   contents: write
 
 jobs:
+  # electron-builder's GitHub publisher looks up (or creates) the release
+  # for this tag before it can upload to it — and does that check
+  # separately for each file it uploads, with no lock between them, so
+  # *any* concurrent uploads racing against a not-yet-existing release can
+  # each end up creating their own. That includes multiple files within a
+  # single platform leg (the .exe, its blockmap, and latest.yml all
+  # racing each other), not just the two platform legs against one
+  # another. Pre-creating the (empty) draft here means every upload from
+  # either platform, however concurrent, finds the same existing release
+  # instead of racing to create one.
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ github.ref_name }}" --draft --title "${{ github.ref_name }}" --notes "" --repo ${{ github.repository }}
+
   build:
+    needs: create-release
     strategy:
       fail-fast: false
-      # electron-builder's GitHub publisher looks up (or creates) the
-      # release for this tag on each run; two legs publishing at once can
-      # both find nothing and each create their own draft, splitting the
-      # assets across two releases. Running one at a time means the second
-      # leg finds what the first already created and adds to it instead.
-      max-parallel: 1
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
