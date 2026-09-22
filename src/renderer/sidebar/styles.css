@@ -423,6 +423,10 @@ body.platform-darwin #tab-strip {
   opacity: 0.4;
 }
 
+.app-group.has-color {
+  border-color: var(--group-color);
+}
+
 #add-app-button {
   width: 32px;
   height: 32px;

@@ -98,10 +98,14 @@ function faviconFallbackText(app) {
 const TOOLTIP_DELAY_MS = 250;
 let tooltipTimer = null;
 
-function showTooltip(button, text) {
-  if (!text) return;
+// content is { title, label? } — label (a group name) renders as its own
+// line above the title rather than appended onto it, so a long title's own
+// truncation can't push the label off the end (see tooltip-overlay for the
+// two-line layout).
+function showTooltip(button, content) {
+  if (!content?.title) return;
   const rect = button.getBoundingClientRect();
-  window.electronAPI.showTooltip(text, rect.right + 8, rect.top + rect.height / 2);
+  window.electronAPI.showTooltip(content, rect.right + 8, rect.top + rect.height / 2);
 }
 
 function hideTooltip() {
@@ -109,10 +113,10 @@ function hideTooltip() {
   window.electronAPI.hideTooltip();
 }
 
-function attachTooltip(button, getText) {
+function attachTooltip(button, getContent) {
   button.addEventListener('mouseenter', () => {
     clearTimeout(tooltipTimer);
-    tooltipTimer = setTimeout(() => showTooltip(button, getText()), TOOLTIP_DELAY_MS);
+    tooltipTimer = setTimeout(() => showTooltip(button, getContent()), TOOLTIP_DELAY_MS);
   });
   button.addEventListener('mouseleave', hideTooltip);
   button.addEventListener('mousedown', hideTooltip);
@@ -180,6 +184,26 @@ function buildTabChip({ label, faviconUrl, isActive, onSelect, onContextMenu, on
 // undefined = no menu open; null = the primary chip's; else a tab id —
 // mirrors main's own ViewManager.tabMenuContext.tabId representation.
 let tabMenuOpenKey;
+
+// Whether the group color/label popover is currently open — set via a main
+// push (GROUP_MENU_OPENED) rather than at its trigger site directly, since
+// it has two: this container's own right-click (below), and a member app's
+// "Customize group..." entry, which lives in a native menu handled entirely
+// in the main process. Unlike the tab menu, it isn't toggled by its own
+// trigger — right-clicking always (re)opens it at the new position — so
+// this only needs to know whether a click elsewhere in the sidebar should
+// close it. Clicks inside the popover itself never reach this listener at
+// all: it's a separate WebContentsView layered on top, not part of this
+// document.
+let groupMenuOpen = false;
+window.electronAPI.onGroupMenuOpened(() => {
+  groupMenuOpen = true;
+});
+document.addEventListener('click', () => {
+  if (!groupMenuOpen) return;
+  window.electronAPI.closeGroupMenu();
+  groupMenuOpen = false;
+});
 
 function openTabMenuFor(key, chipEl) {
   const rect = chipEl.getBoundingClientRect();
@@ -448,7 +472,12 @@ function buildAppButton(app, containerItem) {
   applyAppMeta(button, app);
   attachTooltip(button, () => {
     const current = appsById.get(app.id);
-    return current?.title || current?.name || current?.url;
+    const title = current?.title || current?.name || current?.url;
+    // containerItem is the *group's* item for every member button (see
+    // buildContainer's loop) — so this is the same lookup for any app in
+    // the group, not something specific to this one button.
+    const group = containerItem.type === 'group' ? groupsById.get(containerItem.id) : null;
+    return { title, label: group?.label || null };
   });
   button.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -482,6 +511,11 @@ function buildContainer(item) {
   const group = item.type === 'group' ? groupsById.get(item.id) : null;
   const appIds = group ? group.appIds : [item.id];
 
+  if (group?.color) {
+    container.style.setProperty('--group-color', group.color);
+    container.classList.add('has-color');
+  }
+
   appIds.forEach((appId) => {
     const app = appsById.get(appId);
     if (app) container.appendChild(buildAppButton(app, item));
@@ -493,7 +527,17 @@ function buildContainer(item) {
   // doesn't need to be its own drag source. A real group's whole container
   // *is* a distinct drag source (move the group as a unit, vs. dragging one
   // member button out of it), so only groups get this.
-  if (item.type === 'group') attachContainerDragHandlers(container, item);
+  if (item.type === 'group') {
+    attachContainerDragHandlers(container, item);
+    // Each app button's own contextmenu handler stops propagation, so this
+    // only fires for a right-click on the container's empty padding — not
+    // one already handled by a member button above.
+    container.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      hideTooltip();
+      window.electronAPI.openGroupContextMenu(item.id, { x: Math.round(e.clientX), y: Math.round(e.clientY) });
+    });
+  }
   return container;
 }
 

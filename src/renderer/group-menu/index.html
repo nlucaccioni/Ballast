@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Group menu</title>
+    <style>
+      /* Same semantic palette as sidebar/styles.css, just the subset this
+         page needs — separate page, can't share that stylesheet. Kept in
+         sync by hand; see index.js for how [data-theme] gets set. */
+      :root {
+        --bg: #1e1e1e;
+        --surface: #242424;
+        --border: #404040;
+        --text: #e8e8e8;
+      }
+      :root[data-theme='light'] {
+        --bg: #ffffff;
+        --surface: #f2f3f7;
+        --border: #dcdfe6;
+        --text: #1c1e26;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        font-family: sans-serif;
+      }
+      /* Sizing math (PADDING/GAP/LABEL_HEIGHT/SWATCH_ROW_HEIGHT) is mirrored
+         in main/view-manager.js's GROUP_MENU_* constants, which size this
+         overlay's WebContentsView bounds to fit exactly this content — no
+         native auto-sizing across that boundary, so keep the two in sync. */
+      #menu {
+        box-sizing: border-box;
+        width: 100%;
+        height: 100%;
+        padding: 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        /* The WebContentsView's own bounds are already set to full size
+           before this ever shows, so the box itself can't grow — animate in
+           place instead: starts faded/scaled down, transitions to full
+           size/opacity once index.js adds .visible on open. */
+        opacity: 0;
+        transform: scale(0.96) translateY(-4px);
+        transition: opacity 150ms ease-out, transform 150ms ease-out;
+      }
+      #menu.visible {
+        opacity: 1;
+        transform: none;
+      }
+      /* Closing removes .visible while the view is about to go off-screen —
+         without this, that removal starts a reverse transition that freezes
+         mid-flight the instant rendering pauses, then resumes right as the
+         next open happens, colliding with the fresh forward transition. See
+         tab-menu/index.html's identical #menu.no-transition for the full
+         explanation. */
+      #menu.no-transition {
+        transition: none;
+      }
+      #label-input {
+        box-sizing: border-box;
+        width: 100%;
+        height: 30px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 13px;
+      }
+      #label-input:focus {
+        outline: 1px solid #5b8def;
+      }
+      #swatches {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        /* Vertical breathing room for the selected-state ring (box-shadow),
+           which extends a few px beyond each dot's own 18px box. */
+        padding: 3px 1px;
+      }
+      .swatch {
+        flex-shrink: 0;
+        width: 18px;
+        height: 18px;
+        padding: 0;
+        border: none;
+        border-radius: 50%;
+        cursor: pointer;
+      }
+      /* The "no color" option — an outlined, background-colored dot rather
+         than a filled one, so it reads as "default/none" among filled
+         color swatches. */
+      .swatch-none {
+        background: var(--bg);
+        border: 1px solid var(--border);
+      }
+      /* Each filled swatch sets its own inline background *and* color (see
+         index.js) so this can key off currentColor instead of needing a
+         separate CSS rule per color. The gap gives the ring a halo effect
+         rather than sitting flush against the dot. */
+      .swatch.selected {
+        box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px currentColor;
+      }
+      .swatch-none.selected {
+        box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--border);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="menu">
+      <form id="label-form">
+        <input id="label-input" type="text" autocomplete="off" spellcheck="false" placeholder="Group name" />
+      </form>
+      <div id="swatches"></div>
+    </div>
+    <script src="index.js"></script>
+  </body>
+</html>

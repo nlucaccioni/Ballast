@@ -18,6 +18,8 @@ module.exports = {
   APP_META_CHANGED: 'app:meta-changed', // main -> renderer push (favicon/title)
   OPEN_APP_MENU: 'app:open-menu', // sidebar hamburger button -> main
   OPEN_APP_CONTEXT_MENU: 'app:open-context-menu', // right-click on a favicon -> main
+  OPEN_GROUP_CONTEXT_MENU: 'app:open-group-context-menu', // right-click on empty space in a group's container -> main
+  GROUP_MENU_OPENED: 'app:group-menu-opened', // main -> renderer push; the group popover opened via *any* trigger (this container's own right-click, or a member app's "Customize group..."), so the sidebar knows to close it on the next click elsewhere
   APP_CONTEXT_MENU_REMOVE: 'app:context-menu-remove', // main -> renderer push
   NAV_BACK: 'view:nav-back',
   NAV_FORWARD: 'view:nav-forward',
@@ -32,7 +34,7 @@ module.exports = {
   OPEN_TAB_MENU: 'tab-menu:show', // sidebar -> main, clicking an already-active tab chip
   CLOSE_TAB_MENU: 'tab-menu:hide', // sidebar -> main
   OPEN_TAB_CONTEXT_MENU: 'tabs:context-menu', // sidebar -> main, right-clicking a chip (any chip, active or not)
-  APPS_CHANGED: 'app:list-changed', // main -> renderer push; a new app was pinned outside a direct sidebar request (see ViewManager.tabMenuPromote)
+  APPS_CHANGED: 'app:list-changed', // main -> renderer push; a new app was pinned outside a direct sidebar request (see ViewManager.tabMenuPromote), or a group's color changed
   GET_THEME: 'app:get-theme', // sidebar -> main, for initial state on load
   THEME_CHANGED: 'app:theme-changed', // main -> renderer push (sidebar, and inlined as the same raw string in the tooltip/tab-menu/corner-mask overlays' own preloads)
 };

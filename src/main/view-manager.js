@@ -1,4 +1,4 @@
-const { WebContentsView, shell, nativeTheme, Menu, clipboard } = require('electron');
+const { WebContentsView, shell, nativeTheme, Menu, clipboard, app } = require('electron');
 const path = require('path');
 const { getSessionForApp } = require('./session-manager');
 const { rootDomain, looksLikeAuthFlow } = require('./url-utils');
@@ -11,6 +11,7 @@ const {
   TABS_CHANGED,
   ACTIVE_VIEW_CHANGED,
   APPS_CHANGED,
+  GROUP_MENU_OPENED,
 } = require('../renderer/shared/ipc-channels');
 
 const SIDEBAR_WIDTH = 54; // adjust to final design; must match --sidebar-width in sidebar/styles.css
@@ -31,6 +32,10 @@ const CORNER_BOX_SIZE = CORNER_RADIUS + BORDER_WIDTH;
 // fit), so this only needs to be large enough for realistic titles.
 const TOOLTIP_WIDTH = 260;
 const TOOLTIP_HEIGHT = 24;
+// Taller variant when a group label is showing as its own line above the
+// title (see tooltip-overlay/index.html) rather than appended onto it —
+// must match that file's own two-line layout height.
+const TOOLTIP_HEIGHT_WITH_LABEL = 40;
 // No native auto-sizing across the WebContentsView boundary, so this box is
 // sized here to exactly fit tab-menu/index.html's content — these must
 // match that file's own #menu padding/gap and row heights (see its comment).
@@ -45,6 +50,18 @@ function tabMenuHeight(isPrimary) {
   const rows = 1 + actionRows; // + the URL field itself
   return TAB_MENU_PADDING * 2 + rows * TAB_MENU_ROW_HEIGHT + (rows - 1) * TAB_MENU_GAP;
 }
+
+// Same no-native-autosize situation as the tab menu above — these must
+// match group-menu/index.html's own padding/gap/row-height values.
+const GROUP_MENU_WIDTH = 260;
+const GROUP_MENU_PADDING = 10;
+const GROUP_MENU_GAP = 10;
+const GROUP_MENU_LABEL_HEIGHT = 30;
+// 18px dot + clearance for the selected-state ring, which extends a few px
+// beyond the dot itself (see .swatch.selected's box-shadow).
+const GROUP_MENU_SWATCH_ROW_HEIGHT = 28;
+const GROUP_MENU_HEIGHT =
+  GROUP_MENU_PADDING * 2 + GROUP_MENU_LABEL_HEIGHT + GROUP_MENU_GAP + GROUP_MENU_SWATCH_ROW_HEIGHT;
 
 // Electron's default UA appends "Electron/x.y.z", which is exactly what
 // sites like WhatsApp Web and Teams sniff for to show an "unsupported
@@ -135,6 +152,23 @@ class ViewManager {
     this.tabMenuOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.tabMenuOverlay));
     this.win.contentView.addChildView(this.tabMenuOverlay);
     this.tabMenuContext = null; // { appId, tabId } while open, else null
+
+    // Same technique again for a group's color/label popover — see
+    // openGroupMenu.
+    this.groupMenuOverlay = new WebContentsView({
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'preload', 'group-menu-preload.js'),
+        contextIsolation: true,
+        sandbox: true,
+      },
+    });
+    this.groupMenuOverlay.setBackgroundColor('#00000000');
+    this.groupMenuOverlay.webContents.loadFile(
+      path.join(__dirname, '..', 'renderer', 'group-menu', 'index.html')
+    );
+    this.groupMenuOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.groupMenuOverlay));
+    this.win.contentView.addChildView(this.groupMenuOverlay);
+    this.groupMenuContext = null; // groupId while open, else null
   }
 
   sendThemeTo(view) {
@@ -151,6 +185,7 @@ class ViewManager {
     this.sendThemeTo(this.cornerMask);
     this.sendThemeTo(this.tooltipOverlay);
     this.sendThemeTo(this.tabMenuOverlay);
+    this.sendThemeTo(this.groupMenuOverlay);
   }
 
   // Re-adding an existing child view moves it to the top of the z-order, so
@@ -160,16 +195,18 @@ class ViewManager {
     this.win.contentView.addChildView(this.cornerMask);
     this.win.contentView.addChildView(this.tooltipOverlay);
     this.win.contentView.addChildView(this.tabMenuOverlay);
+    this.win.contentView.addChildView(this.groupMenuOverlay);
   }
 
-  showTooltip(text, x, y) {
+  showTooltip(title, label, x, y) {
+    const height = label ? TOOLTIP_HEIGHT_WITH_LABEL : TOOLTIP_HEIGHT;
     this.tooltipOverlay.setBounds({
       x: Math.round(x),
-      y: Math.round(y - TOOLTIP_HEIGHT / 2),
+      y: Math.round(y - height / 2),
       width: TOOLTIP_WIDTH,
-      height: TOOLTIP_HEIGHT,
+      height,
     });
-    this.tooltipOverlay.webContents.send('tooltip:update', { text, visible: true });
+    this.tooltipOverlay.webContents.send('tooltip:update', { title, label, visible: true });
     this.raiseOverlays();
   }
 
@@ -222,6 +259,53 @@ class ViewManager {
     // size — just off the visible window — keeps it rendering normally
     // the whole time it's "closed".
     this.tabMenuOverlay.setBounds({ x: -10000, y: -10000, width: TAB_MENU_WIDTH, height: tabMenuHeight(false) });
+  }
+
+  // Opened by right-clicking either a group's own empty container space or,
+  // via the "Customize group" item, a member app's context menu — a small
+  // popover for naming the group and picking its sidebar accent color.
+  // Unlike the tab menu's actions, picking a color or editing the label
+  // here doesn't close the popover itself (see group-menu/index.js) — it's
+  // meant to stay open for further edits, only dismissed explicitly.
+  openGroupMenu(groupId, x, y) {
+    const group = configStore.getGroups().find((g) => g.id === groupId);
+    if (!group) return;
+
+    this.groupMenuContext = groupId;
+    const [contentWidth] = this.win.getContentSize();
+    const centeredX = Math.round(x) - GROUP_MENU_WIDTH / 2;
+    const clampedX = Math.max(8, Math.min(centeredX, contentWidth - GROUP_MENU_WIDTH - 8));
+    this.groupMenuOverlay.setBounds({
+      x: clampedX,
+      y: Math.round(y) + 4,
+      width: GROUP_MENU_WIDTH,
+      height: GROUP_MENU_HEIGHT,
+    });
+    this.groupMenuOverlay.webContents.send('group-menu:open', { label: group.label, color: group.color });
+    this.raiseOverlays();
+    // Lets the sidebar close this on the next click elsewhere regardless of
+    // which trigger opened it — see GROUP_MENU_OPENED's own comment.
+    this.win.webContents.send(GROUP_MENU_OPENED);
+  }
+
+  closeGroupMenu() {
+    this.groupMenuContext = null;
+    this.groupMenuOverlay.webContents.send('group-menu:close');
+    // Parked off-screen at a real size rather than collapsed to 0x0 — see
+    // closeTabMenu's identical comment for why.
+    this.groupMenuOverlay.setBounds({ x: -10000, y: -10000, width: GROUP_MENU_WIDTH, height: GROUP_MENU_HEIGHT });
+  }
+
+  groupMenuSetColor(color) {
+    if (!this.groupMenuContext) return;
+    configStore.setGroupColor(this.groupMenuContext, color);
+    this.win.webContents.send(APPS_CHANGED);
+  }
+
+  groupMenuSetLabel(label) {
+    if (!this.groupMenuContext) return;
+    configStore.setGroupLabel(this.groupMenuContext, label);
+    this.win.webContents.send(APPS_CHANGED);
   }
 
   // Resolves whichever view/url a given tab (or, tabId === null, the app's
@@ -438,12 +522,40 @@ class ViewManager {
         );
       }
 
-      if (params.selectionText) {
+      if (params.isEditable) {
+        // A text field's own menu, regardless of whether anything's
+        // currently selected — Cut/Copy/Paste's enabled state follows
+        // editFlags (e.g. Paste disabled on an empty clipboard) rather than
+        // params.selectionText, which only covers Cut/Copy's case. Calling
+        // the view's own methods directly (rather than role: 'cut' etc.,
+        // which acts on whatever webContents Electron considers focused)
+        // guarantees this targets the exact view that was right-clicked.
+        if (items.length) items.push({ type: 'separator' });
+        items.push(
+          { label: 'Undo', enabled: params.editFlags.canUndo, click: () => view.webContents.undo() },
+          { label: 'Redo', enabled: params.editFlags.canRedo, click: () => view.webContents.redo() },
+          { type: 'separator' },
+          { label: 'Cut', enabled: params.editFlags.canCut, click: () => view.webContents.cut() },
+          { label: 'Copy', enabled: params.editFlags.canCopy, click: () => view.webContents.copy() },
+          { label: 'Paste', enabled: params.editFlags.canPaste, click: () => view.webContents.paste() },
+          // Strips formatting from the clipboard's content on the way in —
+          // same as regular paste's condition, since matching style still
+          // needs something on the clipboard to paste in the first place.
+          { label: 'Paste as plain text', enabled: params.editFlags.canPaste, click: () => view.webContents.pasteAndMatchStyle() },
+          { type: 'separator' },
+          { label: 'Select all', enabled: params.editFlags.canSelectAll, click: () => view.webContents.selectAll() },
+        );
+        // OS-version-dependent even on a supported platform (see Electron's
+        // isEmojiPanelSupported docs) — only offer it when it'll actually work.
+        if (app.isEmojiPanelSupported()) {
+          items.push({ type: 'separator' }, { label: 'Emoji', click: () => app.showEmojiPanel() });
+        }
+      } else if (params.selectionText) {
         if (items.length) items.push({ type: 'separator' });
         items.push({ label: 'Copy', role: 'copy' });
       }
 
-      if (!params.linkURL && params.mediaType !== 'image') {
+      if (!params.linkURL && params.mediaType !== 'image' && !params.isEditable) {
         if (items.length) items.push({ type: 'separator' });
         items.push(
           { label: 'Back', accelerator: 'Alt+Left', enabled: view.webContents.canGoBack(), click: () => view.webContents.goBack() },

@@ -11,11 +11,13 @@
         --surface: #2a2a2a;
         --border: #404040;
         --text: #eee;
+        --text-secondary: #aaa;
       }
       :root[data-theme='light'] {
         --surface: #f2f3f7;
         --border: #dcdfe6;
         --text: #1c1e26;
+        --text-secondary: #5b5f6b;
       }
       html,
       body {
@@ -34,20 +36,62 @@
         border: 1px solid var(--border);
         border-radius: 4px;
         background: var(--surface);
-        color: var(--text);
         font-family: sans-serif;
-        font-size: 12px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        /* Show only — hiding stays an instant [hidden]/display:none toggle
+           (see index.js), so a fast mouse sweep across several sidebar
+           icons can't leave a fade-out mid-flight when the next tooltip's
+           fade-in starts (the same reasoning tab-menu/group-menu's
+           no-transition close dance exists for, just sidestepped here
+           since display:none already stops a transition dead rather than
+           needing that extra class). */
+        opacity: 0;
+        /* Negative X — the tooltip sits to the right of its sidebar button
+           (see sidebar/index.js's showTooltip: rect.right + 8), so sliding
+           in from the left reads as emerging from the sidebar itself. */
+        transform: scale(0.96) translateX(-8px);
+        transition: opacity 120ms ease-out, transform 120ms ease-out;
+      }
+      #tooltip.visible {
+        opacity: 1;
+        transform: none;
       }
       #tooltip[hidden] {
         display: none;
       }
+      /* A group's name — its own line above the title (see index.js) so a
+         long title's own ellipsis truncation can't push it off the end,
+         which is what "Gmail — Work" appended onto one line was doing. */
+      #tooltip-label,
+      #tooltip-title {
+        max-width: 100%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #tooltip-label {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        color: var(--text-secondary);
+      }
+      #tooltip-label[hidden] {
+        display: none;
+      }
+      #tooltip-title {
+        font-size: 12px;
+        color: var(--text);
+      }
     </style>
   </head>
   <body>
-    <div id="tooltip" hidden></div>
+    <div id="tooltip" hidden>
+      <div id="tooltip-label" hidden></div>
+      <div id="tooltip-title"></div>
+    </div>
     <script src="index.js"></script>
   </body>
 </html>

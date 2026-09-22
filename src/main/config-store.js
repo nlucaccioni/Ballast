@@ -307,7 +307,7 @@ function createGroupFromApps(sourceAppId, targetAppId, before = false) {
   detachFromGroup(sourceAppId);
 
   const appIds = before ? [sourceAppId, targetAppId] : [targetAppId, sourceAppId];
-  const newGroup = { id: generateGroupId(), label: '', appIds };
+  const newGroup = { id: generateGroupId(), label: '', color: null, appIds };
   setGroups([...getGroups(), newGroup]);
 
   const order = getSidebarOrder().filter(
@@ -341,6 +341,16 @@ function addAppToGroup(groupId, appId, referenceAppId = null, before = false) {
 
 function reorderGroupMembers(groupId, appIds) {
   setGroups(getGroups().map((g) => (g.id === groupId ? { ...g, appIds } : g)));
+}
+
+// color is a hex string from the sidebar's fixed swatch list, or null to
+// clear back to the default border.
+function setGroupColor(groupId, color) {
+  setGroups(getGroups().map((g) => (g.id === groupId ? { ...g, color } : g)));
+}
+
+function setGroupLabel(groupId, label) {
+  setGroups(getGroups().map((g) => (g.id === groupId ? { ...g, label } : g)));
 }
 
 // General top-level reordering: positions itemType/itemId just before/after
@@ -455,6 +465,8 @@ module.exports = {
   addAppToGroup,
   removeAppFromGroup,
   reorderGroupMembers,
+  setGroupColor,
+  setGroupLabel,
   moveSidebarItem,
   getTabs,
   addTab,

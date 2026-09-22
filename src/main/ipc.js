@@ -73,7 +73,7 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
   ipcMain.on(channels.HIDE_ACTIVE_VIEW, () => viewManager.hideActive());
   ipcMain.on(channels.SHOW_ACTIVE_VIEW, () => viewManager.showActive());
 
-  ipcMain.on(channels.SHOW_TOOLTIP, (event, { text, x, y }) => viewManager.showTooltip(text, x, y));
+  ipcMain.on(channels.SHOW_TOOLTIP, (event, { title, label, x, y }) => viewManager.showTooltip(title, label, x, y));
   ipcMain.on(channels.HIDE_TOOLTIP, () => viewManager.hideTooltip());
 
   ipcMain.on(channels.OPEN_APP_MENU, (event, position) => {
@@ -81,6 +81,7 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
   });
 
   ipcMain.on(channels.OPEN_APP_CONTEXT_MENU, (event, { appId, x, y, inGroup }) => {
+    const group = inGroup ? configStore.getGroups().find((g) => g.appIds.includes(appId)) : null;
     const contextMenu = Menu.buildFromTemplate([
       ...(inGroup
         ? [
@@ -94,8 +95,19 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
         label: 'Remove from sidebar',
         click: () => mainWindow.webContents.send(channels.APP_CONTEXT_MENU_REMOVE, appId),
       },
+      ...(group
+        ? [{ type: 'separator' }, { label: 'Customize group...', click: () => viewManager.openGroupMenu(group.id, x, y) }]
+        : []),
     ]);
     contextMenu.popup({ window: mainWindow, x, y });
+  });
+
+  // Right-clicking empty space inside a group's own container (not one of
+  // its app buttons, which have their own menu above) — opens the same
+  // color/label popover directly, with nothing else to pick from a native
+  // menu first.
+  ipcMain.on(channels.OPEN_GROUP_CONTEXT_MENU, (event, { groupId, x, y }) => {
+    viewManager.openGroupMenu(groupId, x, y);
   });
 
   ipcMain.on(channels.NAV_BACK, () => viewManager.navBack());
@@ -152,6 +164,15 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
   ipcMain.on('tab-menu:promote', () => viewManager.tabMenuPromote());
   ipcMain.on('tab-menu:set-primary', () => viewManager.tabMenuSetPrimary());
   ipcMain.on('tab-menu:open-external', () => viewManager.tabMenuOpenExternal());
+
+  // Same deal for the group color/label popover's own preload
+  // (group-menu-preload.js) — 'group-menu:close' is also sent from the
+  // sidebar's own preload (see sidebar-preload.js's closeGroupMenu) when a
+  // click lands elsewhere in the sidebar; both land here identically since
+  // closing doesn't need to know which one asked.
+  ipcMain.on('group-menu:set-color', (event, color) => viewManager.groupMenuSetColor(color));
+  ipcMain.on('group-menu:set-label', (event, label) => viewManager.groupMenuSetLabel(label));
+  ipcMain.on('group-menu:close', () => viewManager.closeGroupMenu());
 
   // GET_THEME is handled synchronously in main/index.js itself (ipcMain.on
   // + event.returnValue), not here — see its own comment for why.

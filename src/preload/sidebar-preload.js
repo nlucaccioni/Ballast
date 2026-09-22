@@ -26,11 +26,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   hideActiveView: () => ipcRenderer.send('view:hide-active'),
   showActiveView: () => ipcRenderer.send('view:show-active'),
-  showTooltip: (text, x, y) => ipcRenderer.send('view:show-tooltip', { text, x, y }),
+  showTooltip: (content, x, y) => ipcRenderer.send('view:show-tooltip', { title: content.title, label: content.label, x, y }),
   hideTooltip: () => ipcRenderer.send('view:hide-tooltip'),
   openAppMenu: (position) => ipcRenderer.send('app:open-menu', position),
   openAppContextMenu: (appId, position, inGroup) =>
     ipcRenderer.send('app:open-context-menu', { appId, x: position.x, y: position.y, inGroup }),
+  openGroupContextMenu: (groupId, position) =>
+    ipcRenderer.send('app:open-group-context-menu', { groupId, x: position.x, y: position.y }),
+  // Not one of shared/ipc-channels.js's constants — see group-menu-preload.js
+  // for why this one's channel name is inlined instead.
+  closeGroupMenu: () => ipcRenderer.send('group-menu:close'),
+  onGroupMenuOpened: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('app:group-menu-opened', listener);
+    return () => ipcRenderer.removeListener('app:group-menu-opened', listener);
+  },
   onContextMenuRemove: (callback) => {
     const listener = (_event, appId) => callback(appId);
     ipcRenderer.on('app:context-menu-remove', listener);
