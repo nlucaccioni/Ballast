@@ -26,34 +26,21 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     steps:
-      # Both gh's own --notes-from-tag detection AND reading the tag
-      # ourselves via `git tag --format` fell back to the tag's target
-      # *commit* message instead of its own annotation, on real runs.
-      # Root cause: actions/checkout defaults fetch-tags to false
-      # regardless of fetch-depth (it's a separate, opt-in setting) — so
-      # the actual annotated tag object was never fetched, only a
-      # lightweight ref to the commit, and every read of "the tag's
-      # content" degraded to that commit's own message instead.
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-      - name: TEMP DEBUG
+      # Every git-based way of reading the tag's own annotation (gh's
+      # --notes-from-tag, `git tag --format`, even with fetch-tags: true)
+      # kept producing the tag's target *commit* message instead — verified
+      # the annotation itself really is correct on GitHub (via `gh api
+      # .../git/tags/<sha>`), so the problem is actions/checkout: for the
+      # specific ref that triggered the run, it materializes refs/tags/<tag>
+      # locally as a plain commit rather than the real tag object, no
+      # matter what fetch options are set. Reading the annotation straight
+      # from the GitHub API instead sidesteps that entirely — no checkout
+      # needed for this step at all.
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "--- git describe ---"
-          git describe --tags || true
-          echo "--- cat-file -t ---"
-          git cat-file -t "${{ github.ref_name }}" || true
-          echo "--- for-each-ref ---"
-          git for-each-ref "refs/tags/${{ github.ref_name }}"
-          echo "--- tag -l contents ---"
-          git tag -l --format='%(contents)' "${{ github.ref_name }}"
-          echo "--- tag -n99 ---"
-          git tag -n99 -l "${{ github.ref_name }}"
-          echo "--- cat-file -p ---"
-          git cat-file -p "refs/tags/${{ github.ref_name }}" || true
-          echo "--- end debug ---"
-      - run: git tag -l --format='%(contents)' "${{ github.ref_name }}" > /tmp/release-notes.txt
+          TAG_SHA=$(gh api "repos/${{ github.repository }}/git/refs/tags/${{ github.ref_name }}" --jq '.object.sha')
+          gh api "repos/${{ github.repository }}/git/tags/$TAG_SHA" --jq '.message' > /tmp/release-notes.txt
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release create "${{ github.ref_name }}" --draft --title "${{ github.ref_name }}" --notes-file /tmp/release-notes.txt
