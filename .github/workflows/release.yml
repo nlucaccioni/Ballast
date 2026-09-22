@@ -26,19 +26,20 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     steps:
-      # --notes-from-tag reads the annotated tag's own message as the
-      # release body, so it needs the tag object actually present locally —
-      # a default shallow checkout of just the triggering ref doesn't carry
-      # tag annotations, hence fetch-depth: 0. Running from inside the
-      # checked-out repo also means --repo can't be passed alongside
-      # --notes-from-tag (gh rejects that combination) — it's redundant
-      # here anyway, since gh infers the repo from the working directory.
+      # gh's own --notes-from-tag detection turned out unreliable here — it
+      # fell back to the tag's target *commit* message instead of the tag's
+      # own annotation on a real run, apparently because actions/checkout
+      # doesn't reliably materialize the full annotated tag object even
+      # with fetch-depth: 0. Reading the annotation ourselves with `git tag
+      # --format` and passing it explicitly via --notes-file sidesteps
+      # whatever gh's auto-detection was doing wrong.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - run: git tag -l --format='%(contents)' "${{ github.ref_name }}" > /tmp/release-notes.txt
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ github.ref_name }}" --draft --title "${{ github.ref_name }}" --notes-from-tag
+        run: gh release create "${{ github.ref_name }}" --draft --title "${{ github.ref_name }}" --notes-file /tmp/release-notes.txt
 
   build:
     needs: create-release
