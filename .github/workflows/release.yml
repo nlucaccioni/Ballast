@@ -43,7 +43,7 @@ jobs:
           gh api "repos/${{ github.repository }}/git/tags/$TAG_SHA" --jq '.message' > /tmp/release-notes.txt
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ github.ref_name }}" --draft --title "${{ github.ref_name }}" --notes-file /tmp/release-notes.txt
+        run: gh release create "${{ github.ref_name }}" --draft --title "${{ github.ref_name }}" --notes-file /tmp/release-notes.txt --repo ${{ github.repository }}
 
   build:
     needs: create-release
