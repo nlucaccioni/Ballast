@@ -26,16 +26,18 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     steps:
-      # gh's own --notes-from-tag detection turned out unreliable here — it
-      # fell back to the tag's target *commit* message instead of the tag's
-      # own annotation on a real run, apparently because actions/checkout
-      # doesn't reliably materialize the full annotated tag object even
-      # with fetch-depth: 0. Reading the annotation ourselves with `git tag
-      # --format` and passing it explicitly via --notes-file sidesteps
-      # whatever gh's auto-detection was doing wrong.
+      # Both gh's own --notes-from-tag detection AND reading the tag
+      # ourselves via `git tag --format` fell back to the tag's target
+      # *commit* message instead of its own annotation, on real runs.
+      # Root cause: actions/checkout defaults fetch-tags to false
+      # regardless of fetch-depth (it's a separate, opt-in setting) — so
+      # the actual annotated tag object was never fetched, only a
+      # lightweight ref to the commit, and every read of "the tag's
+      # content" degraded to that commit's own message instead.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
       - run: git tag -l --format='%(contents)' "${{ github.ref_name }}" > /tmp/release-notes.txt
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
