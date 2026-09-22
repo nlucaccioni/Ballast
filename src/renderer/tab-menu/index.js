@@ -34,3 +34,7 @@ document.getElementById('duplicate-btn').addEventListener('click', () => window.
 promoteBtn.addEventListener('click', () => window.tabMenuAPI.promote());
 setPrimaryBtn.addEventListener('click', () => window.tabMenuAPI.setPrimary());
 document.getElementById('external-btn').addEventListener('click', () => window.tabMenuAPI.openExternal());
+
+window.tabMenuAPI.onThemeChanged(({ theme }) => {
+  document.documentElement.dataset.theme = theme;
+});

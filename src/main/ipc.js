@@ -153,6 +153,9 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
   ipcMain.on('tab-menu:set-primary', () => viewManager.tabMenuSetPrimary());
   ipcMain.on('tab-menu:open-external', () => viewManager.tabMenuOpenExternal());
 
+  // GET_THEME is handled synchronously in main/index.js itself (ipcMain.on
+  // + event.returnValue), not here — see its own comment for why.
+
   // REPORT_UNREAD handler lands in a later step (unread-tracker.js).
 }
 

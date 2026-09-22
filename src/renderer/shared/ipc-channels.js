@@ -33,4 +33,6 @@ module.exports = {
   CLOSE_TAB_MENU: 'tab-menu:hide', // sidebar -> main
   OPEN_TAB_CONTEXT_MENU: 'tabs:context-menu', // sidebar -> main, right-clicking a chip (any chip, active or not)
   APPS_CHANGED: 'app:list-changed', // main -> renderer push; a new app was pinned outside a direct sidebar request (see ViewManager.tabMenuPromote)
+  GET_THEME: 'app:get-theme', // sidebar -> main, for initial state on load
+  THEME_CHANGED: 'app:theme-changed', // main -> renderer push (sidebar, and inlined as the same raw string in the tooltip/tab-menu/corner-mask overlays' own preloads)
 };

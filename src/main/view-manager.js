@@ -1,4 +1,4 @@
-const { WebContentsView, shell } = require('electron');
+const { WebContentsView, shell, nativeTheme } = require('electron');
 const path = require('path');
 const { getSessionForApp } = require('./session-manager');
 const { rootDomain, looksLikeAuthFlow } = require('./url-utils');
@@ -67,6 +67,7 @@ class ViewManager {
     this.meta = new Map(); // appId -> { title, faviconUrl }
     this.unread = new Map(); // appId -> count
     this.activeId = null; // which pinned app is selected in the sidebar
+    this.theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'; // kept current by setTheme(), read by any overlay that (re)loads later
 
     this.win.on('resize', () => {
       if (this.focusedView) this.layout(this.focusedView);
@@ -76,12 +77,20 @@ class ViewManager {
     // is a small transparent overlay painted with an inverse-rounded-corner
     // shape, sitting exactly over the content view's top-left corner.
     this.cornerMask = new WebContentsView({
-      webPreferences: { contextIsolation: true, sandbox: true },
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'preload', 'corner-mask-preload.js'),
+        contextIsolation: true,
+        sandbox: true,
+      },
     });
     this.cornerMask.setBackgroundColor('#00000000');
     this.cornerMask.webContents.loadFile(
       path.join(__dirname, '..', 'renderer', 'corner-mask', 'index.html')
     );
+    // Sending the initial theme right after loadFile() would race the
+    // page's own preload/script registering its listener (loadFile is
+    // async); waiting for did-finish-load guarantees it's actually ready.
+    this.cornerMask.webContents.once('did-finish-load', () => this.sendThemeTo(this.cornerMask));
     this.cornerMask.setBounds({
       x: SIDEBAR_WIDTH,
       y: TITLEBAR_HEIGHT,
@@ -105,6 +114,7 @@ class ViewManager {
     this.tooltipOverlay.webContents.loadFile(
       path.join(__dirname, '..', 'renderer', 'tooltip-overlay', 'index.html')
     );
+    this.tooltipOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.tooltipOverlay));
     this.win.contentView.addChildView(this.tooltipOverlay);
 
     // Same technique again for the per-tab menu (URL field + duplicate/
@@ -122,8 +132,25 @@ class ViewManager {
     this.tabMenuOverlay.webContents.loadFile(
       path.join(__dirname, '..', 'renderer', 'tab-menu', 'index.html')
     );
+    this.tabMenuOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.tabMenuOverlay));
     this.win.contentView.addChildView(this.tabMenuOverlay);
     this.tabMenuContext = null; // { appId, tabId } while open, else null
+  }
+
+  sendThemeTo(view) {
+    view.webContents.send('app:theme-changed', { theme: this.theme });
+  }
+
+  // Called from main/index.js whenever nativeTheme resolves to a different
+  // theme (a menu selection, or the OS itself changing while "System" is
+  // selected) — propagates to every overlay view; the sidebar's own copy
+  // (mainWindow.webContents) is pushed separately by the caller, since it's
+  // not one of these overlay views.
+  setTheme(theme) {
+    this.theme = theme;
+    this.sendThemeTo(this.cornerMask);
+    this.sendThemeTo(this.tooltipOverlay);
+    this.sendThemeTo(this.tabMenuOverlay);
   }
 
   // Re-adding an existing child view moves it to the top of the z-order, so

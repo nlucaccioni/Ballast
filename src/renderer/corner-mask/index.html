@@ -4,6 +4,20 @@
     <meta charset="UTF-8" />
     <title>Corner mask</title>
     <style>
+      /* Matches sidebar/styles.css's --border-subtle/--bg exactly — this
+         mask has to blend seamlessly into the titlebar/sidebar background
+         and the #webview-border-top/-left lines it's continuing, so these
+         can't drift from that file's own values. Kept in sync by hand
+         (separate page, can't share that stylesheet); see index.js for how
+         [data-theme] gets set. */
+      :root {
+        --border-subtle: #303030;
+        --bg: #1e1e1e;
+      }
+      :root[data-theme='light'] {
+        --border-subtle: #e3e5ea;
+        --bg: #ffffff;
+      }
       html,
       body {
         margin: 0;
@@ -17,7 +31,7 @@
          out to `radius` is painted the border color, so the straight
          #webview-border-top/-left lines (styles.css) have something to
          visually continue into instead of meeting at a hard angle; beyond
-         that is chrome-dark, masking the content view's actual
+         that is chrome background, masking the content view's actual
          hard-cornered edge. This box is sized radius + borderWidth (8px)
          so the ring's outer edge lands exactly at the real radius. */
       .mask {
@@ -26,14 +40,15 @@
         background: radial-gradient(
           circle at bottom right,
           transparent 6px,
-          #303030 6px,
-          #303030 7px,
-          #1e1e1e 7px
+          var(--border-subtle) 6px,
+          var(--border-subtle) 7px,
+          var(--bg) 7px
         );
       }
     </style>
   </head>
   <body>
     <div class="mask"></div>
+    <script src="index.js"></script>
   </body>
 </html>

@@ -9,6 +9,7 @@ directories:
 files:
   - src/**/*
   - config/**/*
+  - assets/icons/**/*
   - package.json
   - "!**/*.map"
 
@@ -24,9 +25,12 @@ publish:
   # incomplete one instead.
   releaseType: draft
 
-# No custom icon yet (see assets/icons/) — electron-builder falls back to a
-# default icon on each platform, which is fine to ship with for now; drop
-# an icon.ico/icon.icns in there and reference them below once they exist.
+# A single 1024x1024 source PNG is enough — electron-builder generates the
+# platform-specific .ico/.icns from it during the build, no pre-conversion
+# needed. Applies to both win/mac below (each target's own `icon` key isn't
+# set, so both fall back to this shared one).
+icon: assets/icons/Ballast_Icon.png
+
 win:
   target:
     - target: nsis

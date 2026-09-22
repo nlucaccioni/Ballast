@@ -11,12 +11,52 @@
      below via body.platform-darwin (set from index.js's electronAPI.platform)
      wherever our own titlebar content would otherwise land underneath them. */
   --mac-traffic-light-gap: 78px;
+
+  /* Dark is the default palette; body[data-theme="light"] below overrides
+     it. Driven by main/index.js's nativeTheme, via electronAPI.initialTheme
+     (the initial value) and onThemeChanged (live updates) — see index.js.
+     Kept in sync by hand with main/index.js's TITLEBAR_COLORS (OS-drawn,
+     can't read CSS) and each overlay HTML file's own matching variable
+     block (tooltip-overlay, tab-menu, corner-mask — separate pages, can't
+     share this stylesheet). --accent-unread is deliberately NOT themed:
+     it's a semantic "alert" red, not a surface/text color, and works on
+     either background. */
+  --bg: #1e1e1e;
+  --surface: #2a2a2a;
+  --surface-hover: #333;
+  --surface-active: #4a4a4a;
+  --border: #404040;
+  --border-subtle: #303030;
+  --text: #e8e8e8;
+  --text-secondary: #aaa;
+  --text-muted: #888;
+  --text-disabled: #555;
+  --accent: #c6f8ff; /* brand: light cyan from the app icon's gradient */
+  --accent-unread: #e74c3c;
+}
+
+body[data-theme='light'] {
+  /* True-white base + a cool/blue-tinted gray scale (rather than flat
+     neutral gray) so it reads as crisp and ties into the brand's indigo/
+     cyan identity — the previous all-neutral, narrow-contrast version
+     (#f5f5f5/#e8e8e8/#dcdcdc/...) looked muddy/dingy. */
+  --bg: #ffffff;
+  --surface: #f2f3f7;
+  --surface-hover: #e6e8ef;
+  --surface-active: #d9dce6;
+  --border: #dcdfe6;
+  --border-subtle: #e3e5ea;
+  --text: #1c1e26;
+  --text-secondary: #5b5f6b;
+  --text-muted: #80838f;
+  --text-disabled: #b0b3bc;
+  --accent: #595cff; /* brand: indigo/blue from the app icon's gradient */
 }
 
 body {
   margin: 0;
   font-family: sans-serif;
-  background: #1e1e1e;
+  background: var(--bg);
 }
 
 /* Custom replacement for the native titlebar (see main/index.js's
@@ -33,7 +73,7 @@ body {
   height: var(--titlebar-height);
   display: flex;
   align-items: center;
-  background: #1e1e1e;
+  background: var(--bg);
   -webkit-app-region: drag;
 }
 
@@ -49,7 +89,7 @@ body {
   height: var(--titlebar-height);
   border: none;
   background: transparent;
-  color: #e8e8e8;
+  color: var(--text);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -90,7 +130,7 @@ body.platform-darwin #nav-controls {
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: #e8e8e8;
+  color: var(--text);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -103,11 +143,11 @@ body.platform-darwin #nav-controls {
 }
 
 #nav-controls button:hover:not(:disabled) {
-  background: #333;
+  background: var(--surface-hover);
 }
 
 #nav-controls button:disabled {
-  color: #555;
+  color: var(--text-disabled);
   cursor: default;
 }
 
@@ -148,19 +188,19 @@ body.platform-darwin #tab-strip {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #aaa;
+  color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
   -webkit-app-region: no-drag;
 }
 
 .tab-chip:hover {
-  background: #2a2a2a;
+  background: var(--surface);
 }
 
 .tab-chip.active {
-  background: #333;
-  color: #e8e8e8;
+  background: var(--surface-hover);
+  color: var(--text);
 }
 
 /* Secondary tabs shrink together (like real browser tabs) once there are
@@ -201,7 +241,7 @@ body.platform-darwin #tab-strip {
   align-items: center;
   justify-content: center;
   border-radius: 3px;
-  color: #888;
+  color: var(--text-muted);
 }
 
 /* Only the active tab's close button always shows — an inactive one only
@@ -227,13 +267,13 @@ body.platform-darwin #tab-strip {
   flex-shrink: 0;
   width: 1px;
   height: 18px;
-  background: #404040;
+  background: var(--border);
   margin: 0 2px;
 }
 
 .tab-chip .tab-chip-close:hover {
-  background: #444;
-  color: #fff;
+  background: var(--surface-active);
+  color: var(--text);
 }
 
 /* Sit exactly in the 1px gap main/view-manager.js insets the webview's
@@ -247,7 +287,7 @@ body.platform-darwin #tab-strip {
   left: calc(var(--sidebar-width) + var(--corner-box-size));
   right: 0;
   height: var(--border-width);
-  background: #303030;
+  background: var(--border-subtle);
   pointer-events: none;
 }
 
@@ -257,7 +297,7 @@ body.platform-darwin #tab-strip {
   left: var(--sidebar-width);
   bottom: 0;
   width: var(--border-width);
-  background: #303030;
+  background: var(--border-subtle);
   pointer-events: none;
 }
 
@@ -276,7 +316,7 @@ body.platform-darwin #tab-strip {
      with the WebContentsView's top edge (no padding-top here). */
   gap: 7px;
   box-sizing: border-box;
-  background: #1e1e1e;
+  background: var(--bg);
 }
 
 .app-button {
@@ -286,7 +326,7 @@ body.platform-darwin #tab-strip {
   border: none;
   border-radius: 7px;
   background: transparent;
-  color: #fff;
+  color: var(--text);
   font-size: 12px;
   cursor: pointer;
   display: flex;
@@ -296,11 +336,11 @@ body.platform-darwin #tab-strip {
 }
 
 .app-button:hover {
-  background: #333;
+  background: var(--surface-hover);
 }
 
 .app-button.active {
-  background: #4a4a4a;
+  background: var(--surface-active);
 }
 
 .app-button.dragging {
@@ -322,7 +362,7 @@ body.platform-darwin #tab-strip {
   height: 18px;
   padding: 0 2px;
   border-radius: 9px;
-  background: #e74c3c;
+  background: var(--accent-unread);
   color: #fff;
   font-size: 10px;
   font-weight: 600;
@@ -342,7 +382,7 @@ body.platform-darwin #tab-strip {
   position: fixed;
   height: 2px;
   border-radius: 1px;
-  background: #d0d0d0;
+  background: var(--accent);
   pointer-events: none;
   z-index: 10;
 }
@@ -350,7 +390,7 @@ body.platform-darwin #tab-strip {
 /* Drag-to-group still highlights the target directly — it's a "drop onto
    this" gesture, not a "drop between" one. */
 .drop-merge {
-  outline: 2px solid #d0d0d0;
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
@@ -370,9 +410,9 @@ body.platform-darwin #tab-strip {
   width: 40px;
   box-sizing: border-box;
   padding: 3px;
-  border: 1px solid #404040;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #2a2a2a;
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -386,10 +426,10 @@ body.platform-darwin #tab-strip {
 #add-app-button {
   width: 32px;
   height: 32px;
-  border: 1px dashed #555;
+  border: 1px dashed var(--text-disabled);
   border-radius: 7px;
   background: transparent;
-  color: #aaa;
+  color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -411,7 +451,7 @@ body.platform-darwin #tab-strip {
   left: calc(var(--sidebar-width) + var(--border-width));
   right: 0;
   bottom: 0;
-  background: #1e1e1e;
+  background: var(--bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -428,8 +468,8 @@ body.platform-darwin #tab-strip {
   display: flex;
   align-items: center;
   gap: 14px;
-  background: #2a2a2a;
-  border: 1px solid #404040;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 14px;
   padding: 16px 22px;
 }
@@ -437,7 +477,7 @@ body.platform-darwin #tab-strip {
 .add-app-search .icon {
   width: 22px;
   height: 22px;
-  color: #888;
+  color: var(--text-muted);
   flex-shrink: 0;
 }
 
@@ -447,10 +487,10 @@ body.platform-darwin #tab-strip {
   border: none;
   background: transparent;
   outline: none;
-  color: #eee;
+  color: var(--text);
   font-size: 18px;
 }
 
 .add-app-search input::placeholder {
-  color: #777;
+  color: var(--text-muted);
 }

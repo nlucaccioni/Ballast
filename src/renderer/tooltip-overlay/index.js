@@ -8,3 +8,7 @@ window.tooltipAPI.onUpdate(({ text, visible }) => {
     tooltip.hidden = true;
   }
 });
+
+window.tooltipAPI.onThemeChanged(({ theme }) => {
+  document.documentElement.dataset.theme = theme;
+});

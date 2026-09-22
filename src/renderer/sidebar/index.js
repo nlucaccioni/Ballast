@@ -12,6 +12,14 @@ if (window.electronAPI.platform === 'darwin') {
   document.body.classList.add('platform-darwin');
 }
 
+// electronAPI.initialTheme was resolved synchronously in the preload, at
+// module load — set before this script's first paint, unlike future
+// changes (see onThemeChanged below), which arrive as an async push.
+document.body.dataset.theme = window.electronAPI.initialTheme;
+window.electronAPI.onThemeChanged(({ theme }) => {
+  document.body.dataset.theme = theme;
+});
+
 // Without this, dropping a file-like drag (or a stray native image drag —
 // see the img.draggable fix below) anywhere our own handlers don't
 // explicitly own would fall through to Chromium's default action: saving

@@ -78,4 +78,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('app:list-changed', listener);
     return () => ipcRenderer.removeListener('app:list-changed', listener);
   },
+  // Resolved synchronously (blocking, at preload load time — before the
+  // page paints) rather than an async invoke, so the sidebar's very first
+  // render already has the right theme instead of flashing dark (the
+  // stylesheet's default) and correcting a moment later.
+  initialTheme: ipcRenderer.sendSync('app:get-theme'),
+  onThemeChanged: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('app:theme-changed', listener);
+    return () => ipcRenderer.removeListener('app:theme-changed', listener);
+  },
 });

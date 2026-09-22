@@ -4,6 +4,19 @@
     <meta charset="UTF-8" />
     <title>Tooltip overlay</title>
     <style>
+      /* Same semantic palette as sidebar/styles.css, just the subset this
+         page needs — separate page, can't share that stylesheet. Kept in
+         sync by hand; see index.js for how [data-theme] gets set. */
+      :root {
+        --surface: #2a2a2a;
+        --border: #404040;
+        --text: #eee;
+      }
+      :root[data-theme='light'] {
+        --surface: #f2f3f7;
+        --border: #dcdfe6;
+        --text: #1c1e26;
+      }
       html,
       body {
         margin: 0;
@@ -18,10 +31,10 @@
         max-width: 100%;
         box-sizing: border-box;
         padding: 4px 8px;
-        border: 1px solid #404040;
+        border: 1px solid var(--border);
         border-radius: 4px;
-        background: #2a2a2a;
-        color: #eee;
+        background: var(--surface);
+        color: var(--text);
         font-family: sans-serif;
         font-size: 12px;
         white-space: nowrap;

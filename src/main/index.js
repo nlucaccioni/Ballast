@@ -1,9 +1,10 @@
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, nativeTheme, ipcMain } = require('electron');
 const path = require('path');
 const ViewManager = require('./view-manager');
 const { registerIpcHandlers } = require('./ipc');
 const configStore = require('./config-store');
 const updater = require('./updater');
+const { GET_THEME, THEME_CHANGED } = require('../renderer/shared/ipc-channels');
 
 // Google's login page (and others) proactively probe for available
 // passkeys the moment it loads, via WebAuthn's "conditional UI" — in a
@@ -30,13 +31,54 @@ if (!app.requestSingleInstanceLock()) {
   process.exit(0);
 }
 
+// Drives everything theme-related: nativeTheme.shouldUseDarkColors resolves
+// 'system' against the OS automatically and fires 'updated' whenever that
+// resolution changes, whether from an explicit Light/Dark/System menu pick
+// or the OS's own theme changing while 'system' is selected.
+nativeTheme.themeSource = configStore.getThemePreference();
+
+// titleBarOverlay is OS-drawn (the window controls), not something CSS can
+// reach — kept in sync with styles.css's own --bg/--text values by hand.
+const TITLEBAR_COLORS = {
+  dark: { color: '#1e1e1e', symbolColor: '#e8e8e8' },
+  light: { color: '#ffffff', symbolColor: '#1c1e26' },
+};
+
+function currentTheme() {
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+}
+
+function setThemePreference(pref) {
+  configStore.setThemePreference(pref);
+  nativeTheme.themeSource = pref; // no-ops if this doesn't actually change the resolved theme
+}
+
+// Synchronous on purpose: the sidebar's preload calls this once, at module
+// load — before the page has painted anything — so its initial CSS state
+// is correct immediately instead of flashing dark (the stylesheet's
+// default) and then correcting a moment later once an async round-trip
+// resolves.
+ipcMain.on(GET_THEME, (event) => {
+  event.returnValue = currentTheme();
+});
+
 let mainWindow;
+let viewManager;
 
 // Placeholder menu contents — just enough to reload/inspect/quit while
 // iterating. Opened from the sidebar's hamburger button instead of a menu
 // bar; see index.js's OPEN_APP_MENU handler in ipc.js.
 const appMenu = Menu.buildFromTemplate([
   { label: 'Check for Updates...', click: () => updater.checkForUpdates({ silent: false }) },
+  { type: 'separator' },
+  {
+    label: 'Theme',
+    submenu: [
+      { label: 'Light', type: 'radio', checked: configStore.getThemePreference() === 'light', click: () => setThemePreference('light') },
+      { label: 'Dark', type: 'radio', checked: configStore.getThemePreference() === 'dark', click: () => setThemePreference('dark') },
+      { label: 'System', type: 'radio', checked: configStore.getThemePreference() === 'system', click: () => setThemePreference('system') },
+    ],
+  },
   { type: 'separator' },
   { role: 'reload' },
   { role: 'forceReload' },
@@ -56,10 +98,15 @@ function createWindow() {
     width: 1280,
     height: 800,
     title: 'Ballast',
+    // Packaged builds get their icon from electron-builder.yml's `icon`
+    // (baked into the .exe/.app itself); this is what shows in the
+    // Windows taskbar during `npm start` instead of Electron's default —
+    // doesn't affect the Dock icon on macOS, which is fixed to the app
+    // bundle's icon regardless of this option.
+    icon: path.join(__dirname, '..', '..', 'assets', 'icons', 'Ballast_Icon.png'),
     titleBarStyle: 'hidden',
     titleBarOverlay: {
-      color: '#1e1e1e',
-      symbolColor: '#e8e8e8',
+      ...TITLEBAR_COLORS[currentTheme()],
       height: 36,
     },
     webPreferences: {
@@ -71,7 +118,7 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'sidebar', 'index.html'));
 
-  const viewManager = new ViewManager(mainWindow);
+  viewManager = new ViewManager(mainWindow);
   registerIpcHandlers(viewManager, mainWindow, appMenu);
 
   const apps = configStore.getApps();
@@ -85,6 +132,27 @@ function createWindow() {
   // actually something new.
   setTimeout(() => updater.checkForUpdates({ silent: true }), 10_000);
 }
+
+// Fires on every resolved-theme change, regardless of source (menu pick or
+// the OS itself) — mainWindow/viewManager may not exist yet if this is the
+// very first resolution during startup, before createWindow() has run;
+// createWindow() already reads currentTheme() fresh for its own initial
+// state, so skipping propagation here in that case loses nothing.
+nativeTheme.on('updated', () => {
+  if (!mainWindow || !viewManager) return;
+  const theme = currentTheme();
+  // win.setTitleBarOverlay() (the runtime setter, as opposed to the
+  // constructor option used above) is documented Windows/Linux only —
+  // guarded so an unsupported call on macOS can't take the rest of a
+  // theme change down with it.
+  try {
+    mainWindow.setTitleBarOverlay({ ...TITLEBAR_COLORS[theme], height: 36 });
+  } catch {
+    // no-op — macOS
+  }
+  viewManager.setTheme(theme);
+  mainWindow.webContents.send(THEME_CHANGED, { theme });
+});
 
 app.on('second-instance', () => {
   if (!mainWindow) return;

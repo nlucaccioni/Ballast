@@ -4,6 +4,23 @@
     <meta charset="UTF-8" />
     <title>Tab menu</title>
     <style>
+      /* Same semantic palette as sidebar/styles.css, just the subset this
+         page needs — separate page, can't share that stylesheet. Kept in
+         sync by hand; see index.js for how [data-theme] gets set. */
+      :root {
+        --bg: #1e1e1e;
+        --surface: #242424;
+        --surface-hover: #333;
+        --border: #404040;
+        --text: #e8e8e8;
+      }
+      :root[data-theme='light'] {
+        --bg: #ffffff;
+        --surface: #f2f3f7;
+        --surface-hover: #e6e8ef;
+        --border: #dcdfe6;
+        --text: #1c1e26;
+      }
       html,
       body {
         margin: 0;
@@ -22,9 +39,9 @@
         width: 100%;
         height: 100%;
         padding: 8px;
-        border: 1px solid #404040;
+        border: 1px solid var(--border);
         border-radius: 8px;
-        background: #242424;
+        background: var(--surface);
         display: flex;
         flex-direction: column;
         gap: 6px;
@@ -56,10 +73,10 @@
         width: 100%;
         height: 30px;
         padding: 0 8px;
-        border: 1px solid #404040;
+        border: 1px solid var(--border);
         border-radius: 4px;
-        background: #1e1e1e;
-        color: #e8e8e8;
+        background: var(--bg);
+        color: var(--text);
         font-size: 12px;
       }
       #url-input:focus {
@@ -75,7 +92,7 @@
         border: none;
         border-radius: 4px;
         background: transparent;
-        color: #e8e8e8;
+        color: var(--text);
         font-size: 12px;
         cursor: pointer;
       }
@@ -83,7 +100,7 @@
         display: none;
       }
       .menu-action:hover {
-        background: #333;
+        background: var(--surface-hover);
       }
       .menu-action .icon {
         width: 14px;

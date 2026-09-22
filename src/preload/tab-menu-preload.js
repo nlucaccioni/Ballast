@@ -13,4 +13,7 @@ contextBridge.exposeInMainWorld('tabMenuAPI', {
   promote: () => ipcRenderer.send('tab-menu:promote'),
   setPrimary: () => ipcRenderer.send('tab-menu:set-primary'),
   openExternal: () => ipcRenderer.send('tab-menu:open-external'),
+  onThemeChanged: (callback) => {
+    ipcRenderer.on('app:theme-changed', (_event, payload) => callback(payload));
+  },
 });

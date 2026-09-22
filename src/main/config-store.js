@@ -16,6 +16,18 @@ function getApps() {
   return store.get('apps');
 }
 
+// 'system' (default), 'light', or 'dark' — what the user picked from the
+// Theme submenu (see main/index.js). Not seeded in default-apps.json since
+// every existing install predates this and should just fall back to
+// 'system' rather than needing a migration.
+function getThemePreference() {
+  return store.get('theme', 'system');
+}
+
+function setThemePreference(theme) {
+  store.set('theme', theme);
+}
+
 function getGroups() {
   return store.get('groups');
 }
@@ -450,5 +462,7 @@ module.exports = {
   removeTab,
   reorderTabs,
   resolveAppUrl,
+  getThemePreference,
+  setThemePreference,
   SEARCH_ENGINE_ROOT_DOMAINS,
 };
