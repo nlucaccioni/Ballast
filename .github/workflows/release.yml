@@ -29,13 +29,16 @@ jobs:
       # --notes-from-tag reads the annotated tag's own message as the
       # release body, so it needs the tag object actually present locally —
       # a default shallow checkout of just the triggering ref doesn't carry
-      # tag annotations, hence fetch-depth: 0.
+      # tag annotations, hence fetch-depth: 0. Running from inside the
+      # checked-out repo also means --repo can't be passed alongside
+      # --notes-from-tag (gh rejects that combination) — it's redundant
+      # here anyway, since gh infers the repo from the working directory.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ github.ref_name }}" --draft --title "${{ github.ref_name }}" --notes-from-tag --repo ${{ github.repository }}
+        run: gh release create "${{ github.ref_name }}" --draft --title "${{ github.ref_name }}" --notes-from-tag
 
   build:
     needs: create-release
