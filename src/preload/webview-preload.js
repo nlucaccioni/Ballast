@@ -23,6 +23,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
 // .executeInMainWorld is needed (not a plain assignment here) because this
 // preload's own `window` is a separate, isolated-world object from the
 // page's — see contextIsolation.
+// Telegram Web and other PWA-style apps report unread counts via the
+// Badging API instead of the document.title "(N)" trick unread-tracker.js's
+// watchTitleCount watches for — Electron implements the real
+// navigator.setAppBadge/clearAppBadge itself (it just sets the OS
+// dock/taskbar badge for the whole app), so overriding them here still
+// leaves that native behavior in place; this only adds forwarding the count
+// to main so the sidebar can show it per pinned app. Same
+// executeInMainWorld/window.electronAPI pattern as the WebAuthn override
+// below — see contextIsolation.
+contextBridge.executeInMainWorld({
+  func: () => {
+    if (navigator.setAppBadge) {
+      const originalSetAppBadge = navigator.setAppBadge.bind(navigator);
+      navigator.setAppBadge = (contents) => {
+        window.electronAPI.reportUnread(typeof contents === 'number' ? contents : 1);
+        return originalSetAppBadge(contents);
+      };
+    }
+    if (navigator.clearAppBadge) {
+      const originalClearAppBadge = navigator.clearAppBadge.bind(navigator);
+      navigator.clearAppBadge = () => {
+        window.electronAPI.reportUnread(0);
+        return originalClearAppBadge();
+      };
+    }
+  },
+});
+
 contextBridge.executeInMainWorld({
   func: () => {
     if (navigator.credentials) {

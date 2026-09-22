@@ -156,7 +156,10 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
   // GET_THEME is handled synchronously in main/index.js itself (ipcMain.on
   // + event.returnValue), not here — see its own comment for why.
 
-  // REPORT_UNREAD handler lands in a later step (unread-tracker.js).
+  // REPORT_UNREAD is handled per-view via webContents.ipc, not here — see
+  // unread-tracker.js's watchAppBadge for why (it needs the view's own
+  // appId, which a shared ipcMain handler here doesn't have without extra
+  // event.sender bookkeeping).
 }
 
 module.exports = { registerIpcHandlers };

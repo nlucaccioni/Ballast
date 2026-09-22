@@ -1,8 +1,8 @@
-const { WebContentsView, shell, nativeTheme } = require('electron');
+const { WebContentsView, shell, nativeTheme, Menu, clipboard } = require('electron');
 const path = require('path');
 const { getSessionForApp } = require('./session-manager');
 const { rootDomain, looksLikeAuthFlow } = require('./url-utils');
-const { watchTitleCount } = require('./unread-tracker');
+const { watchTitleCount, watchAppBadge } = require('./unread-tracker');
 const configStore = require('./config-store');
 const {
   APP_META_CHANGED,
@@ -408,6 +408,60 @@ class ViewManager {
     });
   }
 
+  // Electron's own built-in fallback (what shows up when nothing handles
+  // this event) is the same fixed seven items regardless of what was
+  // actually clicked — no link/selection awareness at all. Rebuilding it
+  // ourselves gets that normal-browser adaptiveness back; the plain-page
+  // branch below is otherwise the same set Electron's default already had; see
+  // configureDownloads (session-manager.js) for why "Save as..." here
+  // actually prompts instead of silently landing in the default Downloads
+  // folder.
+  attachContextMenu(view, ownerAppId) {
+    view.webContents.on('context-menu', (event, params) => {
+      const items = [];
+
+      if (params.mediaType === 'image') {
+        items.push(
+          { label: 'Open image in new tab', click: () => this.openTab(ownerAppId, { url: params.srcURL }) },
+          { label: 'Save image as...', click: () => view.webContents.downloadURL(params.srcURL) },
+          { label: 'Copy image', click: () => view.webContents.copyImageAt(params.x, params.y) },
+          { label: 'Copy image address', click: () => clipboard.writeText(params.srcURL) },
+        );
+      }
+
+      if (params.linkURL) {
+        if (items.length) items.push({ type: 'separator' });
+        items.push(
+          { label: 'Open link in new tab', click: () => this.openTab(ownerAppId, { url: params.linkURL }) },
+          { label: 'Save link as...', click: () => view.webContents.downloadURL(params.linkURL) },
+          { label: 'Copy link', click: () => clipboard.writeText(params.linkURL) },
+        );
+      }
+
+      if (params.selectionText) {
+        if (items.length) items.push({ type: 'separator' });
+        items.push({ label: 'Copy', role: 'copy' });
+      }
+
+      if (!params.linkURL && params.mediaType !== 'image') {
+        if (items.length) items.push({ type: 'separator' });
+        items.push(
+          { label: 'Back', accelerator: 'Alt+Left', enabled: view.webContents.canGoBack(), click: () => view.webContents.goBack() },
+          { label: 'Forward', accelerator: 'Alt+Right', enabled: view.webContents.canGoForward(), click: () => view.webContents.goForward() },
+          { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => view.webContents.reload() },
+          { type: 'separator' },
+          { label: 'Save as...', accelerator: 'CmdOrCtrl+S', click: () => view.webContents.downloadURL(view.webContents.getURL()) },
+          { label: 'Print...', accelerator: 'CmdOrCtrl+P', click: () => view.webContents.print() },
+          { type: 'separator' },
+          { label: 'View page source', accelerator: 'CmdOrCtrl+U', click: () => view.webContents.loadURL(`view-source:${params.pageURL}`) },
+          { label: 'Inspect', click: () => view.webContents.inspectElement(params.x, params.y) },
+        );
+      }
+
+      Menu.buildFromTemplate(items).popup({ window: this.win });
+    });
+  }
+
   getOrCreate(app) {
     if (this.views.has(app.id)) return this.views.get(app.id);
 
@@ -426,6 +480,7 @@ class ViewManager {
     view.webContents.loadURL(app.lastUrl || app.url);
 
     this.attachWindowOpenHandler(view, app.id);
+    this.attachContextMenu(view, app.id);
 
     view.webContents.on('page-favicon-updated', (event, favicons) => {
       this.updateMeta(app.id, { faviconUrl: favicons[0] || null });
@@ -437,6 +492,7 @@ class ViewManager {
     if (app.unreadStrategy === 'title-count') {
       watchTitleCount(view, (count) => this.updateUnread(app.id, count));
     }
+    watchAppBadge(view, (count) => this.updateUnread(app.id, count));
 
     view.webContents.on('did-navigate', (event, url) => {
       if (this.focusedView === view) this.emitNavStateForFocused();
@@ -475,6 +531,7 @@ class ViewManager {
     view.webContents.loadURL(tab.url);
 
     this.attachWindowOpenHandler(view, appId);
+    this.attachContextMenu(view, appId);
 
     view.webContents.on('page-favicon-updated', (event, favicons) => {
       this.updateTabMeta(appId, tab.id, { faviconUrl: favicons[0] || null });

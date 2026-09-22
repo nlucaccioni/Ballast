@@ -36,6 +36,13 @@ win:
     - target: nsis
       arch:
         - x64
+    # A single self-contained .exe alongside the installer — no install
+    # step, no Program Files entry, just run it. Still unsigned, so it'll
+    # still trigger a SmartScreen "Windows protected your PC" prompt on
+    # first run (a click-through, not a hard block like macOS Gatekeeper).
+    - target: portable
+      arch:
+        - x64
 
 nsis:
   oneClick: false

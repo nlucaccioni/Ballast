@@ -108,10 +108,30 @@ function configurePermissions(partitionSession, partitionName, win) {
   });
 }
 
+const configuredDownloadSessions = new Set();
+
+// Without this, session.downloadURL() (what the context menu's "Save
+// as.../Save link as..." use) saves silently straight to the default
+// Downloads folder — no prompt at all. A real browser always asks where.
+function configureDownloads(partitionSession, win) {
+  if (configuredDownloadSessions.has(partitionSession)) return;
+  configuredDownloadSessions.add(partitionSession);
+
+  partitionSession.on('will-download', (event, item) => {
+    const savePath = dialog.showSaveDialogSync(win, { defaultPath: item.getFilename() });
+    if (!savePath) {
+      item.cancel();
+      return;
+    }
+    item.setSavePath(savePath);
+  });
+}
+
 function getSessionForApp(app, win) {
   // 'persist:xxx' survives restarts; without 'persist:' it's in-memory only
   const partitionSession = session.fromPartition(app.partition, { cache: true });
   configurePermissions(partitionSession, app.partition, win);
+  configureDownloads(partitionSession, win);
   return partitionSession;
 }
 
