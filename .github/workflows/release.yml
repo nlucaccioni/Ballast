@@ -38,6 +38,21 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+      - name: TEMP DEBUG
+        run: |
+          echo "--- git describe ---"
+          git describe --tags || true
+          echo "--- cat-file -t ---"
+          git cat-file -t "${{ github.ref_name }}" || true
+          echo "--- for-each-ref ---"
+          git for-each-ref "refs/tags/${{ github.ref_name }}"
+          echo "--- tag -l contents ---"
+          git tag -l --format='%(contents)' "${{ github.ref_name }}"
+          echo "--- tag -n99 ---"
+          git tag -n99 -l "${{ github.ref_name }}"
+          echo "--- cat-file -p ---"
+          git cat-file -p "refs/tags/${{ github.ref_name }}" || true
+          echo "--- end debug ---"
       - run: git tag -l --format='%(contents)' "${{ github.ref_name }}" > /tmp/release-notes.txt
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
