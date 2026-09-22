@@ -5,6 +5,13 @@
 
 const sidebar = document.getElementById('sidebar');
 
+// macOS's traffic-light window controls always sit top-left, unlike
+// Windows' titleBarOverlay (top-right) — see styles.css's
+// body.platform-darwin rules for the resulting titlebar layout shift.
+if (window.electronAPI.platform === 'darwin') {
+  document.body.classList.add('platform-darwin');
+}
+
 // Without this, dropping a file-like drag (or a stray native image drag —
 // see the img.draggable fix below) anywhere our own handlers don't
 // explicitly own would fall through to Chromium's default action: saving

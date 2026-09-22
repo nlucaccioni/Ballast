@@ -6,6 +6,11 @@
   --sidebar-width: 54px; /* must match SIDEBAR_WIDTH in main/view-manager.js */
   --corner-box-size: 8px; /* must match CORNER_BOX_SIZE in main/view-manager.js */
   --border-width: 1px; /* must match BORDER_WIDTH in main/view-manager.js */
+  /* macOS always draws its traffic-light window controls top-left (no
+     equivalent to Windows' titleBarOverlay right-side placement) — applied
+     below via body.platform-darwin (set from index.js's electronAPI.platform)
+     wherever our own titlebar content would otherwise land underneath them. */
+  --mac-traffic-light-gap: 78px;
 }
 
 body {
@@ -15,9 +20,11 @@ body {
 }
 
 /* Custom replacement for the native titlebar (see main/index.js's
-   titleBarStyle: 'hidden'): OS window controls still render themselves in
-   the top-right via titleBarOverlay, this just supplies the drag region
-   and hamburger button in what's left. */
+   titleBarStyle: 'hidden'): OS window controls still render themselves via
+   titleBarOverlay — top-right on Windows, top-left on macOS (fixed by the
+   OS, not something titleBarOverlay's config can move) — this just supplies
+   the drag region and our own content in what's left on each side; see
+   body.platform-darwin below for the macOS-specific left-side reservation. */
 #titlebar {
   position: fixed;
   top: 0;
@@ -49,8 +56,19 @@ body {
   justify-content: center;
 }
 
+/* Shifts the hamburger button (the titlebar's only normal-flow child —
+   nav-controls/tab-strip are positioned absolutely below) past the
+   traffic lights instead of landing underneath them. */
+body.platform-darwin #hamburger-button {
+  margin-left: var(--mac-traffic-light-gap);
+}
+
 /* Aligned to the right edge of the sidebar, not to the hamburger button —
-   this is the start of the "active window" area above the WebContentsView. */
+   this is the start of the "active window" area above the WebContentsView.
+   On Mac there's no sidebar-width alignment to preserve here (that gap only
+   existed to line nav-controls up with the sidebar below on Windows), so it
+   sits flush against the hamburger button instead, right past the traffic
+   lights — see body.platform-darwin below. */
 #nav-controls {
   position: absolute;
   left: var(--sidebar-width);
@@ -60,6 +78,10 @@ body {
   align-items: center;
   gap: 2px;
   -webkit-app-region: no-drag;
+}
+
+body.platform-darwin #nav-controls {
+  left: calc(var(--mac-traffic-light-gap) + 36px); /* 36px = hamburger-button's own width */
 }
 
 #nav-controls button {
@@ -91,7 +113,8 @@ body {
 
 /* Starts right after #nav-controls (3 buttons * 32px + 2 * 2px gap = 100px)
    and stops short of the right edge to leave room for the OS window
-   controls titleBarOverlay draws there. */
+   controls titleBarOverlay draws there (Windows only — see
+   body.platform-darwin below, which has nothing to avoid on that side). */
 #tab-strip {
   position: absolute;
   left: calc(var(--sidebar-width) + 100px + 8px);
@@ -107,6 +130,11 @@ body {
      between them (most of this container, most of the time) still drags
      the window, the same as clicking empty titlebar space next to a tab
      in a real browser. */
+}
+
+body.platform-darwin #tab-strip {
+  left: calc(var(--mac-traffic-light-gap) + 36px + 100px + 8px);
+  right: 8px; /* macOS has no right-side window controls to avoid */
 }
 
 .tab-chip {

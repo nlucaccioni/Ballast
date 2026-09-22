@@ -3,6 +3,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Channel names inlined to match shared/ipc-channels.js (see webview-preload.js
 // for why this preload doesn't require the shared module directly).
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Lets styles.css's body.platform-darwin rules account for macOS's
+  // traffic-light window controls, which always sit top-left (unlike
+  // Windows' titleBarOverlay, which draws them top-right) — see index.js.
+  platform: process.platform,
   getApps: () => ipcRenderer.invoke('app:list'),
   switchApp: (appId) => ipcRenderer.invoke('app:switch', appId),
   addApp: (payload) => ipcRenderer.invoke('app:add', payload),
