@@ -80,6 +80,12 @@ const appMenu = Menu.buildFromTemplate([
     ],
   },
   { type: 'separator' },
+  // viewManager isn't assigned yet at this point (this template is built at
+  // module load, before createWindow() runs) — reads it as a closure over
+  // the `let viewManager` below instead, which is fine since a real click
+  // can't happen until well after createWindow() has assigned it.
+  { label: 'Manage site permissions...', click: () => viewManager.openPermissionsPage() },
+  { type: 'separator' },
   { role: 'reload' },
   { role: 'forceReload' },
   { role: 'toggleDevTools' },

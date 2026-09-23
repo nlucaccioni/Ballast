@@ -1,6 +1,13 @@
 const { WebContentsView, shell, nativeTheme, Menu, clipboard, app } = require('electron');
 const path = require('path');
-const { getSessionForApp } = require('./session-manager');
+const {
+  getSessionForApp,
+  PROMPT_PERMISSIONS,
+  PERMISSION_MENU_LABELS,
+  PERMISSION_ICONS,
+  getAppPermissionState,
+  setAppPermissionState,
+} = require('./session-manager');
 const { rootDomain, looksLikeAuthFlow } = require('./url-utils');
 const { watchTitleCount, watchAppBadge } = require('./unread-tracker');
 const configStore = require('./config-store');
@@ -12,6 +19,7 @@ const {
   ACTIVE_VIEW_CHANGED,
   APPS_CHANGED,
   GROUP_MENU_OPENED,
+  PERMISSION_MENU_OPENED,
 } = require('../renderer/shared/ipc-channels');
 
 const SIDEBAR_WIDTH = 54; // adjust to final design; must match --sidebar-width in sidebar/styles.css
@@ -63,6 +71,22 @@ const GROUP_MENU_SWATCH_ROW_HEIGHT = 28;
 const GROUP_MENU_HEIGHT =
   GROUP_MENU_PADDING * 2 + GROUP_MENU_LABEL_HEIGHT + GROUP_MENU_GAP + GROUP_MENU_SWATCH_ROW_HEIGHT;
 
+// Same no-native-autosize situation, for the per-app site-permissions
+// popover — must match permission-menu/index.html's own padding/gap/row
+// values. One row per PROMPT_PERMISSIONS entry, plus a title row on top.
+const PERMISSION_MENU_WIDTH = 300;
+const PERMISSION_MENU_PADDING = 10;
+const PERMISSION_MENU_GAP = 8;
+const PERMISSION_MENU_TITLE_HEIGHT = 18;
+const PERMISSION_MENU_ROW_HEIGHT = 30;
+const PERMISSION_MENU_ROW_COUNT = PROMPT_PERMISSIONS.size;
+const PERMISSION_MENU_HEIGHT =
+  PERMISSION_MENU_PADDING * 2 +
+  PERMISSION_MENU_TITLE_HEIGHT +
+  PERMISSION_MENU_GAP +
+  PERMISSION_MENU_ROW_COUNT * PERMISSION_MENU_ROW_HEIGHT +
+  (PERMISSION_MENU_ROW_COUNT - 1) * PERMISSION_MENU_GAP;
+
 // Electron's default UA appends "Electron/x.y.z", which is exactly what
 // sites like WhatsApp Web and Teams sniff for to show an "unsupported
 // browser, please update" nag — regardless of how current the actual
@@ -88,6 +112,7 @@ class ViewManager {
 
     this.win.on('resize', () => {
       if (this.focusedView) this.layout(this.focusedView);
+      this.layoutPermissionsPage();
     });
 
     // Electron has no API to round a WebContentsView's own corner, so this
@@ -169,6 +194,42 @@ class ViewManager {
     this.groupMenuOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.groupMenuOverlay));
     this.win.contentView.addChildView(this.groupMenuOverlay);
     this.groupMenuContext = null; // groupId while open, else null
+
+    // Same technique again for a single app's site-permissions popover —
+    // see openPermissionMenu.
+    this.permissionMenuOverlay = new WebContentsView({
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'preload', 'permission-menu-preload.js'),
+        contextIsolation: true,
+        sandbox: true,
+      },
+    });
+    this.permissionMenuOverlay.setBackgroundColor('#00000000');
+    this.permissionMenuOverlay.webContents.loadFile(
+      path.join(__dirname, '..', 'renderer', 'permission-menu', 'index.html')
+    );
+    this.permissionMenuOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.permissionMenuOverlay));
+    this.win.contentView.addChildView(this.permissionMenuOverlay);
+    this.permissionMenuContext = null; // appId while open, else null
+
+    // Unlike the popovers above, this one is a full-window modal layer
+    // (see openPermissionsPage) rather than a small box positioned near a
+    // click — its own HTML does the centering/backdrop, so this only ever
+    // needs bounds matching the whole content area.
+    this.permissionsPageOverlay = new WebContentsView({
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'preload', 'permissions-page-preload.js'),
+        contextIsolation: true,
+        sandbox: true,
+      },
+    });
+    this.permissionsPageOverlay.setBackgroundColor('#00000000');
+    this.permissionsPageOverlay.webContents.loadFile(
+      path.join(__dirname, '..', 'renderer', 'permissions-page', 'index.html')
+    );
+    this.permissionsPageOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.permissionsPageOverlay));
+    this.win.contentView.addChildView(this.permissionsPageOverlay);
+    this.permissionsPageOpen = false;
   }
 
   sendThemeTo(view) {
@@ -186,6 +247,8 @@ class ViewManager {
     this.sendThemeTo(this.tooltipOverlay);
     this.sendThemeTo(this.tabMenuOverlay);
     this.sendThemeTo(this.groupMenuOverlay);
+    this.sendThemeTo(this.permissionMenuOverlay);
+    this.sendThemeTo(this.permissionsPageOverlay);
   }
 
   // Re-adding an existing child view moves it to the top of the z-order, so
@@ -196,6 +259,8 @@ class ViewManager {
     this.win.contentView.addChildView(this.tooltipOverlay);
     this.win.contentView.addChildView(this.tabMenuOverlay);
     this.win.contentView.addChildView(this.groupMenuOverlay);
+    this.win.contentView.addChildView(this.permissionMenuOverlay);
+    this.win.contentView.addChildView(this.permissionsPageOverlay);
   }
 
   showTooltip(title, label, x, y) {
@@ -306,6 +371,138 @@ class ViewManager {
     if (!this.groupMenuContext) return;
     configStore.setGroupLabel(this.groupMenuContext, label);
     this.win.webContents.send(APPS_CHANGED);
+  }
+
+  // Builds the { key, label, state } list both the per-app popover and the
+  // all-apps audit table render as rows/columns — kept in one place so the
+  // two UIs can't quietly drift apart on which permissions they show.
+  permissionRowsForApp(app) {
+    return [...PROMPT_PERMISSIONS].map((permission) => ({
+      key: permission,
+      label: PERMISSION_MENU_LABELS[permission] || permission,
+      icon: PERMISSION_ICONS[permission] || '',
+      state: getAppPermissionState(app, permission),
+    }));
+  }
+
+  // Opened via the per-app right-click menu's "Site permissions..." item
+  // (see ipc.js) — a small popover for reviewing/changing what one app is
+  // allowed to do, without needing to trigger a real permission prompt
+  // again first (the whole reason this exists: there was previously no way
+  // back from an accidental Block).
+  openPermissionMenu(appId, x, y) {
+    const app = configStore.getApp(appId);
+    if (!app) return;
+
+    this.permissionMenuContext = appId;
+    const [contentWidth] = this.win.getContentSize();
+    const centeredX = Math.round(x) - PERMISSION_MENU_WIDTH / 2;
+    const clampedX = Math.max(8, Math.min(centeredX, contentWidth - PERMISSION_MENU_WIDTH - 8));
+    this.permissionMenuOverlay.setBounds({
+      x: clampedX,
+      y: Math.round(y) + 4,
+      width: PERMISSION_MENU_WIDTH,
+      height: PERMISSION_MENU_HEIGHT,
+    });
+    this.permissionMenuOverlay.webContents.send('permission-menu:open', {
+      title: this.getMeta(appId).title || app.name,
+      permissions: this.permissionRowsForApp(app),
+    });
+    this.raiseOverlays();
+    this.win.webContents.send(PERMISSION_MENU_OPENED);
+  }
+
+  closePermissionMenu() {
+    this.permissionMenuContext = null;
+    this.permissionMenuOverlay.webContents.send('permission-menu:close');
+    this.permissionMenuOverlay.setBounds({ x: -10000, y: -10000, width: PERMISSION_MENU_WIDTH, height: PERMISSION_MENU_HEIGHT });
+  }
+
+  permissionMenuSetState(permission, state) {
+    if (!this.permissionMenuContext) return;
+    const app = configStore.getApp(this.permissionMenuContext);
+    if (!app) return;
+    setAppPermissionState(app, permission, state);
+  }
+
+  permissionRowForApp(app) {
+    let hostname = app.url;
+    try {
+      hostname = new URL(app.lastUrl || app.url).hostname;
+    } catch {
+      // keep the raw url as a fallback label
+    }
+    return {
+      type: 'app',
+      id: app.id,
+      title: this.getMeta(app.id).title || app.name,
+      hostname,
+      permissions: this.permissionRowsForApp(app),
+    };
+  }
+
+  // The audit-everything view (opened from the app menu — see main/index.js)
+  // — a full-window modal listing every pinned app against every permission
+  // type at once, for reviewing the whole picture rather than one app at a
+  // time. Its own HTML handles centering/backdrop, so this just needs to
+  // cover the content area; layoutPermissionsPage() keeps it doing that
+  // across a resize while it's open (see the constructor's win.on('resize')).
+  //
+  // Rows follow configStore.getSidebarOrder() — the same source the sidebar
+  // itself renders from — rather than apps.json's own order, and a group's
+  // members carry that group's own color (see permissionRowForApp's
+  // groupColor) so the renderer can draw its accent bar, in the group's
+  // own appIds order, so this always matches what's actually on screen
+  // instead of drifting from it.
+  openPermissionsPage() {
+    this.permissionsPageOpen = true;
+    this.layoutPermissionsPage();
+
+    const groups = configStore.getGroups();
+    const rows = [];
+    for (const item of configStore.getSidebarOrder()) {
+      if (item.type === 'app') {
+        const app = configStore.getApp(item.id);
+        if (app) rows.push(this.permissionRowForApp(app));
+      } else if (item.type === 'group') {
+        const group = groups.find((g) => g.id === item.id);
+        if (!group) continue;
+        for (const appId of group.appIds) {
+          const app = configStore.getApp(appId);
+          if (app) rows.push({ ...this.permissionRowForApp(app), groupColor: group.color || null });
+        }
+      }
+    }
+
+    // Column metadata (label/icon) is the same regardless of which app it
+    // came from — PROMPT_PERMISSIONS's own iteration order — so it's sent
+    // once here rather than repeated on every row.
+    const columns = [...PROMPT_PERMISSIONS].map((permission) => ({
+      key: permission,
+      label: PERMISSION_MENU_LABELS[permission] || permission,
+      icon: PERMISSION_ICONS[permission] || '',
+    }));
+
+    this.permissionsPageOverlay.webContents.send('permissions-page:open', { columns, rows });
+    this.raiseOverlays();
+  }
+
+  layoutPermissionsPage() {
+    if (!this.permissionsPageOpen) return;
+    const [width, height] = this.win.getContentSize();
+    this.permissionsPageOverlay.setBounds({ x: 0, y: TITLEBAR_HEIGHT, width, height: height - TITLEBAR_HEIGHT });
+  }
+
+  closePermissionsPage() {
+    this.permissionsPageOpen = false;
+    this.permissionsPageOverlay.webContents.send('permissions-page:close');
+    this.permissionsPageOverlay.setBounds({ x: -10000, y: -10000, width: 800, height: 600 });
+  }
+
+  permissionsPageSetState(appId, permission, state) {
+    const app = configStore.getApp(appId);
+    if (!app) return;
+    setAppPermissionState(app, permission, state);
   }
 
   // Resolves whichever view/url a given tab (or, tabId === null, the app's

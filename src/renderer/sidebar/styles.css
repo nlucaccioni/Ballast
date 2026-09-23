@@ -55,7 +55,7 @@ body[data-theme='light'] {
 
 body {
   margin: 0;
-  font-family: sans-serif;
+  font-family: 'Outfit', sans-serif;
   background: var(--bg);
 }
 
@@ -345,6 +345,29 @@ body.platform-darwin #tab-strip {
 
 .app-button.dragging {
   opacity: 0.4;
+}
+
+/* A quick pop on switch — plain feedback on the sidebar icon itself
+   (cheap, ordinary CSS) rather than animating the actual app-content
+   transition, which would mean either snapshotting the outgoing
+   WebContentsView to cross-fade it (real cost, added latency) or a
+   setBounds()-stepped slide — real, unwanted overhead on a high-frequency,
+   want-it-instant action like switching pinned apps. See index.js's
+   highlightActive for how the class gets (re)triggered. */
+@keyframes app-pulse {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.app-button.pulse {
+  animation: app-pulse 220ms ease-out;
 }
 
 .app-favicon {

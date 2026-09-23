@@ -95,6 +95,8 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
         label: 'Remove from sidebar',
         click: () => mainWindow.webContents.send(channels.APP_CONTEXT_MENU_REMOVE, appId),
       },
+      { type: 'separator' },
+      { label: 'Site permissions...', click: () => viewManager.openPermissionMenu(appId, x, y) },
       ...(group
         ? [{ type: 'separator' }, { label: 'Customize group...', click: () => viewManager.openGroupMenu(group.id, x, y) }]
         : []),
@@ -173,6 +175,25 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
   ipcMain.on('group-menu:set-color', (event, color) => viewManager.groupMenuSetColor(color));
   ipcMain.on('group-menu:set-label', (event, label) => viewManager.groupMenuSetLabel(label));
   ipcMain.on('group-menu:close', () => viewManager.closeGroupMenu());
+
+  // Same deal for the per-app site-permissions popover's own preload
+  // (permission-menu-preload.js) — 'permission-menu:close' is also sent
+  // from the sidebar's own preload when a click lands elsewhere in the
+  // sidebar (see sidebar-preload.js's closePermissionMenu).
+  ipcMain.on('permission-menu:set-state', (event, { permission, state }) =>
+    viewManager.permissionMenuSetState(permission, state)
+  );
+  ipcMain.on('permission-menu:close', () => viewManager.closePermissionMenu());
+
+  // Same deal again for the all-apps permissions audit page's own preload
+  // (permissions-page-preload.js) — this one has no sidebar-side trigger to
+  // share 'close' with, since it's opened from the app menu, not a context
+  // menu, and closes itself entirely from within its own backdrop/Escape
+  // handling (see permissions-page/index.js).
+  ipcMain.on('permissions-page:set-state', (event, { appId, permission, state }) =>
+    viewManager.permissionsPageSetState(appId, permission, state)
+  );
+  ipcMain.on('permissions-page:close', () => viewManager.closePermissionsPage());
 
   // GET_THEME is handled synchronously in main/index.js itself (ipcMain.on
   // + event.returnValue), not here — see its own comment for why.

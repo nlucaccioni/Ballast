@@ -41,6 +41,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('app:group-menu-opened', listener);
     return () => ipcRenderer.removeListener('app:group-menu-opened', listener);
   },
+  // Not one of shared/ipc-channels.js's constants — see permission-menu-preload.js
+  // for why this one's channel name is inlined instead.
+  closePermissionMenu: () => ipcRenderer.send('permission-menu:close'),
+  onPermissionMenuOpened: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('app:permission-menu-opened', listener);
+    return () => ipcRenderer.removeListener('app:permission-menu-opened', listener);
+  },
   onContextMenuRemove: (callback) => {
     const listener = (_event, appId) => callback(appId);
     ipcRenderer.on('app:context-menu-remove', listener);

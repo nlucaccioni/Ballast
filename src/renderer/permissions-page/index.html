@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Site Permissions</title>
+    <link rel="stylesheet" href="../shared/fonts/outfit.css" />
+    <style>
+      /* Same semantic palette as sidebar/styles.css, just the subset this
+         page needs — separate page, can't share that stylesheet. Kept in
+         sync by hand; see index.js for how [data-theme] gets set. */
+      :root {
+        --bg: #1e1e1e;
+        --surface: #242424;
+        --surface-alt: #2a2a2a;
+        --border: #404040;
+        --text: #e8e8e8;
+        --text-secondary: #aaa;
+        --backdrop: rgba(0, 0, 0, 0.5);
+        --state-allow: #34a853;
+        --state-block: #eb5757;
+      }
+      :root[data-theme='light'] {
+        --bg: #ffffff;
+        --surface: #f2f3f7;
+        --surface-alt: #e9ebf1;
+        --border: #dcdfe6;
+        --text: #1c1e26;
+        --text-secondary: #5b5f6b;
+        --backdrop: rgba(0, 0, 0, 0.3);
+        --state-allow: #1e8e3e;
+        --state-block: #d33;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        font-family: 'Outfit', sans-serif;
+      }
+      /* This overlay's own WebContentsView always spans the whole window
+         (see ViewManager.layoutPermissionsPage) — unlike tab-menu/group-menu/
+         permission-menu, which are small popovers sized to fit their content
+         exactly, this is a modal layer, so *it* does the centering instead
+         of main needing to compute a card position. */
+      #backdrop {
+        box-sizing: border-box;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        transition: background 150ms ease-out;
+      }
+      #backdrop.visible {
+        background: var(--backdrop);
+      }
+      #card {
+        box-sizing: border-box;
+        width: 90%;
+        max-width: 800px;
+        max-height: 80%;
+        display: flex;
+        flex-direction: column;
+        /* Matches the outer radius/border every other popover in this app
+           uses (tab-menu, group-menu, permission-menu's own #menu) — this
+           card previously had its own, slightly larger 10px. */
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        opacity: 0;
+        transform: scale(0.96) translateY(-8px);
+        transition: opacity 150ms ease-out, transform 150ms ease-out;
+      }
+      #backdrop.visible #card {
+        opacity: 1;
+        transform: none;
+      }
+      #backdrop.no-transition,
+      #backdrop.no-transition #card {
+        transition: none;
+      }
+      #card-header {
+        flex-shrink: 0;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        /* Horizontal padding matches the table's own first-column left
+           inset (th:first-child/td:first-child's 19px below) on both
+           sides, so the title and the close button line up with the "App"
+           column and the table's own edges instead of sitting further in. */
+        padding: 20px 19px;
+        border-bottom: 1px solid var(--border);
+      }
+      #card-title {
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--text);
+        /* Trims the font's built-in leading above the cap-height, which
+           was otherwise showing as extra empty space above the glyphs
+           themselves — not just visual padding CSS added. */
+        text-box: trim-both cap alphabetic;
+      }
+      #close-btn {
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: 20px;
+        line-height: 1;
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 4px;
+      }
+      #close-btn:hover {
+        background: var(--surface-alt);
+        color: var(--text);
+      }
+      #table-wrap {
+        overflow-y: auto;
+        /* table-layout: fixed below + percentage column widths keep every
+           column within the card's own width, so this never needs to
+           scroll sideways the way auto-sized columns could. */
+        overflow-x: hidden;
+      }
+      /* Chrome's default scrollbar is light-themed regardless of page
+         theme — without this it shows up starkly bright against this
+         card's dark surface. Built entirely from the same variables as
+         everything else here, so it already follows the light theme too. */
+      #table-wrap::-webkit-scrollbar {
+        width: 10px;
+      }
+      #table-wrap::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      #table-wrap::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 999px;
+        border: 2px solid var(--surface);
+        background-clip: padding-box;
+      }
+      #table-wrap::-webkit-scrollbar-thumb:hover {
+        background: var(--text-secondary);
+        background-clip: padding-box;
+      }
+      #empty {
+        padding: 32px 16px;
+        text-align: center;
+        color: var(--text-secondary);
+        font-size: 13px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        /* Fixed layout is what makes the percentage widths below actually
+           hold — without it the browser sizes columns from their content
+           (a long header like "Camera & Microphone") instead, which is what
+           was pushing the last column past the card's edge. */
+        table-layout: fixed;
+      }
+      th,
+      td {
+        box-sizing: border-box;
+        padding: 14px 16px;
+        text-align: center;
+        overflow-wrap: break-word;
+      }
+      /* The app column: wider (it holds the longest text) and left-aligned;
+         every permission column splits the rest evenly. Extra left padding
+         on both header and body cells makes room for the group-color bar
+         (see td.app-cell/.group-bar below) without needing to touch either
+         cell's real border box — see that comment for why. */
+      th:first-child,
+      td:first-child {
+        width: 25%;
+        text-align: left;
+        padding-left: 19px;
+      }
+      thead th {
+        position: sticky;
+        top: 0;
+        /* Above the body's own rows while scrolled — .toggle is `position:
+           relative`, which otherwise creates a stacking context that can
+           paint over a sticky header with no z-index of its own. */
+        z-index: 1;
+        background: var(--surface);
+        color: var(--text-secondary);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      /* Not border-bottom (a collapsed border paints at the header's
+         normal-flow position, not wherever position: sticky has since
+         moved it, so it'd scroll away with the header's original slot) —
+         and box-shadow turned out not to render reliably on table cells
+         under border-collapse either. A plain ::after box doesn't go
+         through either the collapsed-border or the box-shadow-on-a-
+         table-cell code path, so it just works. */
+      thead th::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 1px;
+        background: var(--border);
+      }
+      tbody tr {
+        border-bottom: 1px solid var(--border);
+      }
+      tbody tr:last-child {
+        border-bottom: none;
+      }
+      /* A group's accent color as a slim bar at the row's own left edge —
+         same idea as the sidebar's own colored group border (styles.css's
+         .app-group.has-color), rather than a separate header row/dot. This
+         used to be a real border-left on the cell, but under
+         border-collapse that competed with the row's own border-bottom
+         right at the corner (the wider border wins the shared pixel),
+         which was cutting the divider line short of the true left edge —
+         an absolutely-positioned overlay (see .group-bar) sits outside the
+         table's border/collapse model entirely instead, so it can't
+         interfere with anything else being drawn. */
+      td.app-cell {
+        position: relative;
+        color: var(--text);
+        font-weight: 600;
+        font-size: 14px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .group-bar {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 3px;
+        /* Transparent by default (an ungrouped app) — set to the group's
+           real color inline per row (see index.js). */
+        background: transparent;
+      }
+      .app-title {
+        display: block;
+        color: var(--text-secondary);
+        font-weight: 400;
+        font-size: 12px;
+        margin-top: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      /* Tri-state toggle: a single sliding switch rather than three
+         separate buttons — Allow (left, green) / Ask (middle, neutral) /
+         Block (right, red). Click cycles through all three, same
+         click-to-cycle interaction the old three-button version used.
+         Allow/Block colors match --state-allow/--state-block exactly, the
+         same variables permission-menu/index.html's own toggle-equivalent
+         controls use, so a given state reads identically everywhere. */
+      .toggle {
+        position: relative;
+        flex-shrink: 0;
+        width: 44px;
+        height: 24px;
+        border: none;
+        border-radius: 999px;
+        background: var(--border);
+        padding: 0;
+        cursor: pointer;
+        transition: background 150ms ease-out;
+      }
+      .toggle[data-state='allow'] {
+        background: var(--state-allow);
+      }
+      .toggle[data-state='block'] {
+        background: var(--state-block);
+      }
+      /* Explicit left per state (rather than a base position plus a
+         translateX shift) so each one's own inset from its nearest track
+         edge is trivially checkable — and matches top's 4px (24 - 16 = 8,
+         halved), not some other value: allow sits 4px from the left edge,
+         block 4px from the right (44 - 16 - 4 = 24), ask exactly centered
+         ((44 - 16) / 2 = 14, which happens to land the same either way). */
+      .toggle .knob {
+        position: absolute;
+        top: 4px;
+        left: 4px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+        transition: left 150ms ease-out;
+      }
+      .toggle[data-state='ask'] .knob {
+        left: 14px;
+      }
+      .toggle[data-state='block'] .knob {
+        left: 24px;
+      }
+      /* Hover tooltip showing the toggle's current state — a plain title
+         attribute's hover delay isn't tunable (same reasoning the sidebar's
+         own custom tooltip overlay exists for), so this is a small child
+         element instead, shown via a pure-CSS opacity/visibility
+         transition: showing has a 0.5s transition-delay, hiding (the base,
+         non-:hover rule) has none, so it disappears immediately on
+         mouseleave but only appears after sitting on it for half a second. */
+      .toggle-tip {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 50%;
+        transform: translateX(-50%);
+        /* Higher than thead th's z-index: 1 — on the first body row, this
+           tooltip pops up right into the sticky header's own space, and
+           without this it was painting underneath the header instead of
+           over it. */
+        z-index: 2;
+        padding: 4px 8px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 11px;
+        font-weight: 500;
+        white-space: nowrap;
+        pointer-events: none;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 100ms ease-out, visibility 0s linear 100ms;
+      }
+      .toggle:hover .toggle-tip {
+        opacity: 1;
+        visibility: visible;
+        transition: opacity 100ms ease-out 0.5s, visibility 0s linear 0.5s;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="backdrop">
+      <div id="card">
+        <div id="card-header">
+          <span id="card-title">Site Permissions</span>
+          <button id="close-btn" type="button" aria-label="Close">&times;</button>
+        </div>
+        <div id="table-wrap">
+          <table id="table" hidden>
+            <thead>
+              <tr id="header-row"></tr>
+            </thead>
+            <tbody id="table-body"></tbody>
+          </table>
+          <div id="empty" hidden>No pinned apps yet.</div>
+        </div>
+      </div>
+    </div>
+    <script src="index.js"></script>
+  </body>
+</html>

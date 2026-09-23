@@ -20,6 +20,7 @@ module.exports = {
   OPEN_APP_CONTEXT_MENU: 'app:open-context-menu', // right-click on a favicon -> main
   OPEN_GROUP_CONTEXT_MENU: 'app:open-group-context-menu', // right-click on empty space in a group's container -> main
   GROUP_MENU_OPENED: 'app:group-menu-opened', // main -> renderer push; the group popover opened via *any* trigger (this container's own right-click, or a member app's "Customize group..."), so the sidebar knows to close it on the next click elsewhere
+  PERMISSION_MENU_OPENED: 'app:permission-menu-opened', // main -> renderer push; the per-app site-permissions popover opened (always via the native "Site permissions..." context menu item), so the sidebar knows to close it on the next click elsewhere
   APP_CONTEXT_MENU_REMOVE: 'app:context-menu-remove', // main -> renderer push
   NAV_BACK: 'view:nav-back',
   NAV_FORWARD: 'view:nav-forward',

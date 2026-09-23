@@ -72,7 +72,17 @@ function isAppInGroup(appId) {
 
 function highlightActive(appId) {
   activeButtonEl = buttonsByAppId.get(appId) || null;
-  if (activeButtonEl) activeButtonEl.classList.add('active');
+  if (activeButtonEl) {
+    activeButtonEl.classList.add('active');
+    // Quick pulse on switch (see styles.css's .app-button.pulse) — remove
+    // then force a reflow before re-adding, since a CSS animation doesn't
+    // replay just from a class already being present; this way switching
+    // back to a button that pulsed before still retriggers it instead of
+    // silently no-op'ing.
+    activeButtonEl.classList.remove('pulse');
+    void activeButtonEl.offsetWidth;
+    activeButtonEl.classList.add('pulse');
+  }
 }
 
 function setActive(appId) {
@@ -199,10 +209,24 @@ let groupMenuOpen = false;
 window.electronAPI.onGroupMenuOpened(() => {
   groupMenuOpen = true;
 });
+
+// Same deal for the per-app site-permissions popover — it only ever opens
+// from the native "Site permissions..." context menu item (main process),
+// so this is the only place the renderer learns it's open at all.
+let permissionMenuOpen = false;
+window.electronAPI.onPermissionMenuOpened(() => {
+  permissionMenuOpen = true;
+});
+
 document.addEventListener('click', () => {
-  if (!groupMenuOpen) return;
-  window.electronAPI.closeGroupMenu();
-  groupMenuOpen = false;
+  if (groupMenuOpen) {
+    window.electronAPI.closeGroupMenu();
+    groupMenuOpen = false;
+  }
+  if (permissionMenuOpen) {
+    window.electronAPI.closePermissionMenu();
+    permissionMenuOpen = false;
+  }
 });
 
 function openTabMenuFor(key, chipEl) {
@@ -863,7 +887,7 @@ addButton.id = 'add-app-button';
 addButton.innerHTML =
   '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
   '<path d="M5 12h14" /><path d="M12 5v14" /></svg>';
-addButton.title = 'Add app';
+attachTooltip(addButton, () => ({ title: 'Add app' }));
 addButton.addEventListener('click', () => openAddAppDialog());
 sidebar.appendChild(addButton);
 
