@@ -97,6 +97,15 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
       },
       { type: 'separator' },
       { label: 'Site permissions...', click: () => viewManager.openPermissionMenu(appId, x, y) },
+      // Disabled when there's nothing loaded to hibernate (already
+      // hibernated) or it's the one currently on screen (hibernateApp
+      // itself guards this too, but greying it out here says why up front
+      // instead of a click silently doing nothing).
+      {
+        label: 'Hibernate app',
+        enabled: viewManager.views.has(appId) && viewManager.views.get(appId) !== viewManager.focusedView,
+        click: () => viewManager.hibernateApp(appId),
+      },
       ...(group
         ? [{ type: 'separator' }, { label: 'Customize group...', click: () => viewManager.openGroupMenu(group.id, x, y) }]
         : []),
@@ -194,6 +203,17 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
     viewManager.permissionsPageSetState(appId, permission, state)
   );
   ipcMain.on('permissions-page:close', () => viewManager.closePermissionsPage());
+
+  // Same deal again for the memory/hibernation settings page's own preload
+  // (hibernation-page-preload.js) — also opened from the app menu, closes
+  // itself the same way permissions-page does.
+  ipcMain.on('hibernation-page:set-mode', (event, mode) => viewManager.hibernationPageSetMode(mode));
+  ipcMain.on('hibernation-page:set-tabs-enabled', (event, enabled) => viewManager.hibernationPageSetTabsEnabled(enabled));
+  ipcMain.on('hibernation-page:set-idle-minutes', (event, minutes) => viewManager.hibernationPageSetIdleMinutes(minutes));
+  ipcMain.on('hibernation-page:set-app-policy', (event, { appId, policy }) =>
+    viewManager.hibernationPageSetAppPolicy(appId, policy)
+  );
+  ipcMain.on('hibernation-page:close', () => viewManager.closeHibernationPage());
 
   // GET_THEME is handled synchronously in main/index.js itself (ipcMain.on
   // + event.returnValue), not here — see its own comment for why.

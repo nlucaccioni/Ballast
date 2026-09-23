@@ -14,7 +14,14 @@
         --border: #404040;
         --text: #e8e8e8;
         --text-secondary: #aaa;
-        --accent: #5b8def;
+        /* Brand accent — same hex as sidebar/styles.css's own --accent
+           (the app icon's gradient colors), not a generic blue. Dark
+           theme's is a light cyan, so text sitting on a solid fill of it
+           (see .segmented button[data-state='ask'].active) needs dark
+           text, not white — --accent-contrast carries whichever of the two
+           actually reads against this theme's own --accent. */
+        --accent: #c6f8ff;
+        --accent-contrast: #1c1e26;
         /* Same values as permissions-page/index.html's --state-allow/
            --state-block, so a given state reads identically in both UIs. */
         --state-allow: #34a853;
@@ -26,7 +33,8 @@
         --border: #dcdfe6;
         --text: #1c1e26;
         --text-secondary: #5b5f6b;
-        --accent: #3b6fd6;
+        --accent: #595cff;
+        --accent-contrast: #ffffff;
         --state-allow: #1e8e3e;
         --state-block: #d33;
       }
@@ -171,6 +179,9 @@
       }
       .segmented button[data-state='ask'].active {
         background: var(--accent);
+        /* Overrides the plain white above — dark theme's brand accent is a
+           light cyan, where white text would barely read. */
+        color: var(--accent-contrast);
       }
       .segmented button[data-state='allow'].active {
         background: var(--state-allow);

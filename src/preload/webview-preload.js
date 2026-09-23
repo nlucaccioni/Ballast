@@ -1,5 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Set on this view's webPreferences.additionalArguments only for an
+// unpackaged (dev) run — see view-manager.js's DEV_PRELOAD_ARGS — so the
+// debug logging below never ships in a built release.
+const isDev = process.argv.includes('--ballast-dev');
+
 // Kept minimal on purpose — see spec section 10: sites can revoke
 // notification permission if they detect an automated/headless context,
 // so avoid touching `navigator` or other fingerprintable globals here.
@@ -33,10 +38,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
 // executeInMainWorld/window.electronAPI pattern as the WebAuthn override
 // below — see contextIsolation.
 contextBridge.executeInMainWorld({
-  func: () => {
+  func: (debugLogging) => {
+    // Dev-only debug logging for the Discord stuck-badge investigation —
+    // see the isDev comment above for how this stays out of a release
+    // build. Logged here (main world) rather than the preload's own
+    // isolated-world scope so it shows up in DevTools' default console.
+    if (debugLogging) {
+      console.log('[Ballast debug] badge override installed; visibilityState=', document.visibilityState, 'hidden=', document.hidden);
+      document.addEventListener('visibilitychange', () => {
+        console.log('[Ballast debug] visibilitychange ->', document.visibilityState, 'hidden=', document.hidden);
+      });
+    }
     if (navigator.setAppBadge) {
       const originalSetAppBadge = navigator.setAppBadge.bind(navigator);
       navigator.setAppBadge = (contents) => {
+        if (debugLogging) console.log('[Ballast debug] setAppBadge(', contents, ') at', new Date().toISOString());
         window.electronAPI.reportUnread(typeof contents === 'number' ? contents : 1);
         return originalSetAppBadge(contents);
       };
@@ -44,11 +60,13 @@ contextBridge.executeInMainWorld({
     if (navigator.clearAppBadge) {
       const originalClearAppBadge = navigator.clearAppBadge.bind(navigator);
       navigator.clearAppBadge = () => {
+        if (debugLogging) console.log('[Ballast debug] clearAppBadge() at', new Date().toISOString());
         window.electronAPI.reportUnread(0);
         return originalClearAppBadge();
       };
     }
   },
+  args: [isDev],
 });
 
 contextBridge.executeInMainWorld({

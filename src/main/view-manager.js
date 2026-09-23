@@ -87,6 +87,21 @@ const PERMISSION_MENU_HEIGHT =
   PERMISSION_MENU_ROW_COUNT * PERMISSION_MENU_ROW_HEIGHT +
   (PERMISSION_MENU_ROW_COUNT - 1) * PERMISSION_MENU_GAP;
 
+// How often checkIdleViews() sweeps for eligible-and-idle views — a fixed
+// cadence separate from the user-configurable idle threshold itself
+// (configStore.getHibernationIdleMinutes), so lowering that threshold takes
+// effect within one sweep instead of needing a restart.
+const HIBERNATE_CHECK_INTERVAL_MS = 2 * 60 * 1000;
+
+// Passed to every pinned-app WebContentsView's webPreferences.additionalArguments
+// (which Electron appends to that renderer's own process.argv — the
+// documented way to hand a preload script a small flag) so
+// webview-preload.js can gate its dev-only debug logging the same way
+// index.js's appMenu gates its own debug menu item on app.isPackaged.
+// Computed once here rather than inline in getOrCreate/getOrCreateTabView
+// since `app` is shadowed by their own app-config parameter in both.
+const DEV_PRELOAD_ARGS = app.isPackaged ? [] : ['--ballast-dev'];
+
 // Electron's default UA appends "Electron/x.y.z", which is exactly what
 // sites like WhatsApp Web and Teams sniff for to show an "unsupported
 // browser, please update" nag — regardless of how current the actual
@@ -109,11 +124,22 @@ class ViewManager {
     this.unread = new Map(); // appId -> count
     this.activeId = null; // which pinned app is selected in the sidebar
     this.theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'; // kept current by setTheme(), read by any overlay that (re)loads later
+    // appId (primary views) or tabId (tab views) -> Date.now() of last
+    // creation/focus — see touchFocusTime/checkIdleViews. Distinct id
+    // shapes (slug vs 'tab-...') mean the two kinds never collide sharing
+    // one map.
+    this.lastFocusedAt = new Map();
 
     this.win.on('resize', () => {
       if (this.focusedView) this.layout(this.focusedView);
       this.layoutPermissionsPage();
+      this.layoutHibernationPage();
     });
+
+    // Sweeps for idle, hibernation-eligible views on a fixed cadence — see
+    // checkIdleViews for the actual eligibility rule (global mode + per-app
+    // override + never the focused view).
+    this.hibernateTimer = setInterval(() => this.checkIdleViews(), HIBERNATE_CHECK_INTERVAL_MS);
 
     // Electron has no API to round a WebContentsView's own corner, so this
     // is a small transparent overlay painted with an inverse-rounded-corner
@@ -230,6 +256,23 @@ class ViewManager {
     this.permissionsPageOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.permissionsPageOverlay));
     this.win.contentView.addChildView(this.permissionsPageOverlay);
     this.permissionsPageOpen = false;
+
+    // Same full-window-modal-layer shape as permissionsPageOverlay above —
+    // see openHibernationPage.
+    this.hibernationPageOverlay = new WebContentsView({
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'preload', 'hibernation-page-preload.js'),
+        contextIsolation: true,
+        sandbox: true,
+      },
+    });
+    this.hibernationPageOverlay.setBackgroundColor('#00000000');
+    this.hibernationPageOverlay.webContents.loadFile(
+      path.join(__dirname, '..', 'renderer', 'hibernation-page', 'index.html')
+    );
+    this.hibernationPageOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.hibernationPageOverlay));
+    this.win.contentView.addChildView(this.hibernationPageOverlay);
+    this.hibernationPageOpen = false;
   }
 
   sendThemeTo(view) {
@@ -249,6 +292,7 @@ class ViewManager {
     this.sendThemeTo(this.groupMenuOverlay);
     this.sendThemeTo(this.permissionMenuOverlay);
     this.sendThemeTo(this.permissionsPageOverlay);
+    this.sendThemeTo(this.hibernationPageOverlay);
   }
 
   // Re-adding an existing child view moves it to the top of the z-order, so
@@ -261,6 +305,7 @@ class ViewManager {
     this.win.contentView.addChildView(this.groupMenuOverlay);
     this.win.contentView.addChildView(this.permissionMenuOverlay);
     this.win.contentView.addChildView(this.permissionsPageOverlay);
+    this.win.contentView.addChildView(this.hibernationPageOverlay);
   }
 
   showTooltip(title, label, x, y) {
@@ -503,6 +548,82 @@ class ViewManager {
     const app = configStore.getApp(appId);
     if (!app) return;
     setAppPermissionState(app, permission, state);
+  }
+
+  hibernationRowForApp(app) {
+    let hostname = app.url;
+    try {
+      hostname = new URL(app.lastUrl || app.url).hostname;
+    } catch {
+      // keep the raw url as a fallback label
+    }
+    return {
+      id: app.id,
+      title: this.getMeta(app.id).title || app.name,
+      hostname,
+      policy: app.hibernatePolicy || 'default',
+    };
+  }
+
+  // Same shape as openPermissionsPage (see its own comment) — one settings
+  // page rather than per-app context-menu toggles, so there's a single
+  // place to see and change both the global default and every app's own
+  // override at once.
+  openHibernationPage() {
+    this.hibernationPageOpen = true;
+    this.layoutHibernationPage();
+
+    const groups = configStore.getGroups();
+    const rows = [];
+    for (const item of configStore.getSidebarOrder()) {
+      if (item.type === 'app') {
+        const app = configStore.getApp(item.id);
+        if (app) rows.push(this.hibernationRowForApp(app));
+      } else if (item.type === 'group') {
+        const group = groups.find((g) => g.id === item.id);
+        if (!group) continue;
+        for (const appId of group.appIds) {
+          const app = configStore.getApp(appId);
+          if (app) rows.push({ ...this.hibernationRowForApp(app), groupColor: group.color || null });
+        }
+      }
+    }
+
+    this.hibernationPageOverlay.webContents.send('hibernation-page:open', {
+      mode: configStore.getHibernationMode(),
+      tabsEnabled: configStore.getHibernateTabsEnabled(),
+      idleMinutes: configStore.getHibernationIdleMinutes(),
+      rows,
+    });
+    this.raiseOverlays();
+  }
+
+  layoutHibernationPage() {
+    if (!this.hibernationPageOpen) return;
+    const [width, height] = this.win.getContentSize();
+    this.hibernationPageOverlay.setBounds({ x: 0, y: TITLEBAR_HEIGHT, width, height: height - TITLEBAR_HEIGHT });
+  }
+
+  closeHibernationPage() {
+    this.hibernationPageOpen = false;
+    this.hibernationPageOverlay.webContents.send('hibernation-page:close');
+    this.hibernationPageOverlay.setBounds({ x: -10000, y: -10000, width: 800, height: 600 });
+  }
+
+  hibernationPageSetMode(mode) {
+    configStore.setHibernationMode(mode);
+  }
+
+  hibernationPageSetTabsEnabled(enabled) {
+    configStore.setHibernateTabsEnabled(enabled);
+  }
+
+  hibernationPageSetIdleMinutes(minutes) {
+    configStore.setHibernationIdleMinutes(minutes);
+  }
+
+  hibernationPageSetAppPolicy(appId, policy) {
+    configStore.setAppHibernatePolicy(appId, policy);
   }
 
   // Resolves whichever view/url a given tab (or, tabId === null, the app's
@@ -780,6 +901,7 @@ class ViewManager {
         preload: path.join(__dirname, '..', 'preload', 'webview-preload.js'),
         contextIsolation: true,
         sandbox: true,
+        additionalArguments: DEV_PRELOAD_ARGS,
       },
     });
     view.webContents.setUserAgent(DESKTOP_USER_AGENT);
@@ -821,6 +943,12 @@ class ViewManager {
     });
 
     this.views.set(app.id, view);
+    this.touchFocusTime(app.id);
+    // Reaching this line means the view didn't already exist in this.views
+    // — either genuinely first-time, or it just woke from hibernation
+    // (hibernateApp deletes the map entry but leaves everything else, e.g.
+    // the cached favicon/title, alone). Either way it's not hibernated now.
+    this.updateMeta(app.id, { hibernated: false });
     return view;
   }
 
@@ -842,6 +970,7 @@ class ViewManager {
         preload: path.join(__dirname, '..', 'preload', 'webview-preload.js'),
         contextIsolation: true,
         sandbox: true,
+        additionalArguments: DEV_PRELOAD_ARGS,
       },
     });
     view.webContents.setUserAgent(DESKTOP_USER_AGENT);
@@ -871,6 +1000,7 @@ class ViewManager {
     });
 
     this.tabViews.set(tab.id, view);
+    this.touchFocusTime(tab.id);
     return view;
   }
 
@@ -979,6 +1109,71 @@ class ViewManager {
     });
   }
 
+  touchFocusTime(key) {
+    this.lastFocusedAt.set(key, Date.now());
+  }
+
+  // Whether an app is eligible to hibernate right now: an explicit 'never'
+  // always wins, an explicit 'always' always hibernates, and 'default' (or
+  // no override at all) falls back to the global mode — opt-in means
+  // 'default' apps are protected unless the user turns opt-out on globally.
+  isAppHibernateEligible(app) {
+    const policy = app.hibernatePolicy || 'default';
+    if (policy === 'never') return false;
+    if (policy === 'always') return true;
+    return configStore.getHibernationMode() === 'opt-out';
+  }
+
+  // Sweeps every loaded-but-not-focused view and hibernates whichever ones
+  // are both eligible (isAppHibernateEligible, or hibernateTabsEnabled for
+  // tabs) and have sat idle past the configurable threshold — see
+  // hibernateApp/hibernateTab for what actually happens to the view.
+  checkIdleViews() {
+    const idleMs = configStore.getHibernationIdleMinutes() * 60 * 1000;
+    const now = Date.now();
+
+    for (const [appId, view] of this.views) {
+      if (view === this.focusedView) continue;
+      const app = configStore.getApp(appId);
+      if (!app || !this.isAppHibernateEligible(app)) continue;
+      const lastFocused = this.lastFocusedAt.get(appId) || 0;
+      if (now - lastFocused > idleMs) this.hibernateApp(appId);
+    }
+
+    if (!configStore.getHibernateTabsEnabled()) return;
+    for (const [tabId, view] of this.tabViews) {
+      if (view === this.focusedView) continue;
+      const lastFocused = this.lastFocusedAt.get(tabId) || 0;
+      if (now - lastFocused > idleMs) this.hibernateTab(tabId);
+    }
+  }
+
+  // Dormant views are never attached to win.contentView in the first place
+  // — only setFocusedView ever adds one (see its own comment) — so there's
+  // nothing to detach here. Same "drop the reference and let Electron tear
+  // down the WebContents" idiom destroy() already uses below, just without
+  // that method's other cleanup (meta/unread/activeTabByApp all need to
+  // survive, so getOrCreate can restore the sidebar icon instantly and
+  // rehydrate the exact same app on next click rather than a blank slate).
+  hibernateApp(appId) {
+    const view = this.views.get(appId);
+    // checkIdleViews already skips the focused view before ever calling
+    // this, but the context menu's manual "Hibernate app" action can target
+    // it directly — hibernating the view that's currently on screen would
+    // detach it from bookkeeping while Electron keeps rendering it, leaving
+    // a stale, unreachable WebContents behind once focus moves elsewhere.
+    if (!view || view === this.focusedView) return;
+    this.views.delete(appId);
+    this.lastFocusedAt.delete(appId);
+    this.updateMeta(appId, { hibernated: true });
+  }
+
+  hibernateTab(tabId) {
+    if (!this.tabViews.has(tabId)) return;
+    this.tabViews.delete(tabId);
+    this.lastFocusedAt.delete(tabId);
+  }
+
   // Attaches `view` as the one visible content view, detaching whatever was
   // focused before. Shared by every path that changes what's on screen
   // (switching pinned apps, switching tabs, opening a new one, closing the
@@ -1017,6 +1212,7 @@ class ViewManager {
     }
 
     const view = this.getOrCreate(app);
+    this.touchFocusTime(appId);
     this.setFocusedView(view);
     this.activeId = appId;
     this.emitActiveChanged();
@@ -1025,6 +1221,7 @@ class ViewManager {
 
   showTab(appId, tab) {
     const view = this.getOrCreateTabView(appId, tab);
+    this.touchFocusTime(tab.id);
     this.setFocusedView(view);
     this.activeId = appId;
     this.activeTabByApp.set(appId, tab.id);
@@ -1059,6 +1256,7 @@ class ViewManager {
     }
 
     if (view) this.tabViews.delete(tabId);
+    this.lastFocusedAt.delete(tabId);
     configStore.removeTab(appId, tabId);
     this.emitActiveChanged();
     this.emitTabsChanged(appId);
@@ -1083,6 +1281,12 @@ class ViewManager {
     if (this.focusedView) this.win.contentView.removeChildView(this.focusedView);
   }
 
+  // TEMP debug aid for the Discord badge investigation — see index.js's menu
+  // item. Remove once done.
+  openDevToolsForActive() {
+    if (this.focusedView) this.focusedView.webContents.openDevTools({ mode: 'detach' });
+  }
+
   showActive() {
     if (!this.focusedView) return;
     this.win.contentView.addChildView(this.focusedView);
@@ -1103,9 +1307,11 @@ class ViewManager {
       }
       this.views.delete(appId);
     }
+    this.lastFocusedAt.delete(appId);
 
     for (const tab of configStore.getTabs(appId)) {
       const tabView = this.tabViews.get(tab.id);
+      this.lastFocusedAt.delete(tab.id);
       if (!tabView) continue;
       if (this.focusedView === tabView) {
         this.win.contentView.removeChildView(tabView);

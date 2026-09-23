@@ -64,6 +64,12 @@ jobs:
       - run: npx electron-builder --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No real cert is configured (see electron-builder.yml's mac.identity
+          # comment) — without this, electron-builder's own keychain search for
+          # one to auto-sign with is a pointless step that can only ever come
+          # up empty on this runner, or in principle collide with something
+          # unrelated already in it.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
 
   # Runs only once both platform legs above have uploaded their assets to
   # the shared draft, then flips it to a real, visible release.

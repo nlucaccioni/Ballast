@@ -50,13 +50,20 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
 
-# Unsigned (no Apple Developer ID cert / notarization configured) — macOS
-# Gatekeeper will flag the app as being from an unidentified developer.
-# Users need to right-click -> Open the first time, or run
-# `xattr -cr /Applications/Ballast.app` to clear the quarantine flag.
-# Fixing this for real means enrolling in the Apple Developer Program and
-# wiring up CSC_LINK/APPLE_ID secrets in the release workflow.
+# Ad-hoc signed (identity: '-'), not a real Developer ID cert — no Apple
+# account involved, just codesign with a locally-generated identity instead
+# of leaving the binary unsigned entirely. That's still enough for Gatekeeper
+# to flag it as being from an unidentified developer, but downgrades it from
+# the harsher "is damaged and can't be opened" error unsigned arm64 builds
+# hit (macOS requires *some* signature to even run an arm64 binary at all —
+# without one, the quarantine check on first launch reports it as damaged
+# rather than just untrusted). Users still need to right-click -> Open the
+# first time (or run `xattr -cr /Applications/Ballast.app` if even that
+# fails). Fixing this for real (no warning at all) means enrolling in the
+# Apple Developer Program and wiring up real CSC_LINK/APPLE_ID secrets plus
+# notarization in the release workflow.
 mac:
+  identity: "-"
   target:
     - target: dmg
       arch:

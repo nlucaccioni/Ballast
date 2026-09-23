@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Memory &amp; Hibernation</title>
+    <link rel="stylesheet" href="../shared/fonts/outfit.css" />
+    <style>
+      /* Same semantic palette/structure as permissions-page/index.html —
+         see that file's own comments for the reasoning behind each of
+         these (border-collapse quirks, sticky-header divider, toggle inset
+         math, etc.); kept in sync by hand, not shared, since each is its
+         own standalone WebContentsView page. */
+      :root {
+        --bg: #1e1e1e;
+        --surface: #242424;
+        --surface-alt: #2a2a2a;
+        --border: #404040;
+        --text: #e8e8e8;
+        --text-secondary: #aaa;
+        /* Brand accent — same hex as sidebar/styles.css's own --accent
+           (the app icon's gradient colors), not a generic blue. Dark
+           theme's is a light cyan, so text sitting on a solid fill of it
+           (see #mode-switch button.active) needs dark text, not white —
+           --accent-contrast carries whichever of the two actually reads
+           against this theme's own --accent. */
+        --accent: #c6f8ff;
+        --accent-contrast: #1c1e26;
+        --backdrop: rgba(0, 0, 0, 0.5);
+        --state-allow: #34a853;
+        --state-block: #eb5757;
+      }
+      :root[data-theme='light'] {
+        --bg: #ffffff;
+        --surface: #f2f3f7;
+        --surface-alt: #e9ebf1;
+        --border: #dcdfe6;
+        --text: #1c1e26;
+        --text-secondary: #5b5f6b;
+        --accent: #595cff;
+        --accent-contrast: #ffffff;
+        --backdrop: rgba(0, 0, 0, 0.3);
+        --state-allow: #1e8e3e;
+        --state-block: #d33;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        font-family: 'Outfit', sans-serif;
+      }
+      #backdrop {
+        box-sizing: border-box;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        transition: background 150ms ease-out;
+      }
+      #backdrop.visible {
+        background: var(--backdrop);
+      }
+      #card {
+        box-sizing: border-box;
+        width: 90%;
+        max-width: 800px;
+        max-height: 80%;
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        opacity: 0;
+        transform: scale(0.96) translateY(-8px);
+        transition: opacity 150ms ease-out, transform 150ms ease-out;
+      }
+      #backdrop.visible #card {
+        opacity: 1;
+        transform: none;
+      }
+      #backdrop.no-transition,
+      #backdrop.no-transition #card {
+        transition: none;
+      }
+      #card-header {
+        flex-shrink: 0;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px 19px;
+        border-bottom: 1px solid var(--border);
+      }
+      #card-title {
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--text);
+        text-box: trim-both cap alphabetic;
+      }
+      #close-btn {
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: 20px;
+        line-height: 1;
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 4px;
+      }
+      #close-btn:hover {
+        background: var(--surface-alt);
+        color: var(--text);
+      }
+      /* --- Global controls: mode segmented switch, tabs checkbox, idle
+         threshold select — sit above the per-app table, same horizontal
+         inset as the table's own first column below (19px) so everything
+         lines up on one left edge. */
+      #controls {
+        flex-shrink: 0;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 20px;
+        padding: 14px 19px;
+        border-bottom: 1px solid var(--border);
+      }
+      .control-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .control-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+      }
+      #mode-switch {
+        display: flex;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      #mode-switch button {
+        border: none;
+        background: var(--surface-alt);
+        color: var(--text-secondary);
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 6px 12px;
+        cursor: pointer;
+      }
+      #mode-switch button:not(:last-child) {
+        border-right: 1px solid var(--border);
+      }
+      #mode-switch button.active {
+        background: var(--accent);
+        color: var(--accent-contrast);
+      }
+      #idle-select {
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text);
+        background: var(--surface-alt);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 6px 8px;
+      }
+      #tabs-checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        cursor: pointer;
+      }
+      #table-wrap {
+        overflow-y: auto;
+        overflow-x: hidden;
+      }
+      #table-wrap::-webkit-scrollbar {
+        width: 10px;
+      }
+      #table-wrap::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      #table-wrap::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 999px;
+        border: 2px solid var(--surface);
+        background-clip: padding-box;
+      }
+      #table-wrap::-webkit-scrollbar-thumb:hover {
+        background: var(--text-secondary);
+        background-clip: padding-box;
+      }
+      #empty {
+        padding: 32px 16px;
+        text-align: center;
+        color: var(--text-secondary);
+        font-size: 13px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        table-layout: fixed;
+      }
+      th,
+      td {
+        box-sizing: border-box;
+        padding: 14px 16px;
+        text-align: center;
+        overflow-wrap: break-word;
+      }
+      th:first-child,
+      td:first-child {
+        width: 60%;
+        text-align: left;
+        padding-left: 19px;
+      }
+      thead th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: var(--surface);
+        color: var(--text-secondary);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      thead th::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 1px;
+        background: var(--border);
+      }
+      tbody tr {
+        border-bottom: 1px solid var(--border);
+      }
+      tbody tr:last-child {
+        border-bottom: none;
+      }
+      td.app-cell {
+        position: relative;
+        color: var(--text);
+        font-weight: 600;
+        font-size: 14px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .group-bar {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 3px;
+        background: transparent;
+      }
+      .app-title {
+        display: block;
+        color: var(--text-secondary);
+        font-weight: 400;
+        font-size: 12px;
+        margin-top: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      /* Tri-state toggle: Never (left, red/protected) / Default (middle,
+         neutral — follows the global mode above) / Always (right, green —
+         hibernate this app regardless of the global mode). Same component
+         as permissions-page/index.html's own Allow/Ask/Block toggle, just
+         relabeled (and with Allow/Block's colors swapped — the semantics
+         here run the other way, "never" is the one that needs to stand
+         out) — see that file's comments for the inset/z-index/tooltip
+         reasoning, unchanged here. */
+      .toggle {
+        position: relative;
+        flex-shrink: 0;
+        width: 44px;
+        height: 24px;
+        border: none;
+        border-radius: 999px;
+        background: var(--border);
+        padding: 0;
+        cursor: pointer;
+        transition: background 150ms ease-out;
+      }
+      .toggle[data-state='never'] {
+        background: var(--state-block);
+      }
+      .toggle[data-state='always'] {
+        background: var(--state-allow);
+      }
+      .toggle .knob {
+        position: absolute;
+        top: 4px;
+        left: 4px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+        transition: left 150ms ease-out;
+      }
+      .toggle[data-state='default'] .knob {
+        left: 14px;
+      }
+      .toggle[data-state='always'] .knob {
+        left: 24px;
+      }
+      .toggle-tip {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 2;
+        padding: 4px 8px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 11px;
+        font-weight: 500;
+        white-space: nowrap;
+        pointer-events: none;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 100ms ease-out, visibility 0s linear 100ms;
+      }
+      .toggle:hover .toggle-tip {
+        opacity: 1;
+        visibility: visible;
+        transition: opacity 100ms ease-out 0.5s, visibility 0s linear 0.5s;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="backdrop">
+      <div id="card">
+        <div id="card-header">
+          <span id="card-title">Memory &amp; Hibernation</span>
+          <button id="close-btn" type="button" aria-label="Close">&times;</button>
+        </div>
+        <div id="controls">
+          <div class="control-group">
+            <span class="control-label">Default</span>
+            <div id="mode-switch">
+              <button type="button" data-mode="opt-in">Opt-in</button>
+              <button type="button" data-mode="opt-out">Opt-out</button>
+            </div>
+          </div>
+          <div class="control-group">
+            <span class="control-label">Idle for</span>
+            <select id="idle-select">
+              <option value="10">10 min</option>
+              <option value="20">20 min</option>
+              <option value="30">30 min</option>
+              <option value="60">60 min</option>
+            </select>
+          </div>
+          <div class="control-group">
+            <label id="tabs-checkbox-label">
+              <input type="checkbox" id="tabs-checkbox" />
+              Hibernate inactive tabs
+            </label>
+          </div>
+        </div>
+        <div id="table-wrap">
+          <table id="table" hidden>
+            <thead>
+              <tr>
+                <th>App</th>
+                <th>Hibernate</th>
+              </tr>
+            </thead>
+            <tbody id="table-body"></tbody>
+          </table>
+          <div id="empty" hidden>No pinned apps yet.</div>
+        </div>
+      </div>
+    </div>
+    <script src="index.js"></script>
+  </body>
+</html>

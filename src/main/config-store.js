@@ -28,6 +28,34 @@ function setThemePreference(theme) {
   store.set('theme', theme);
 }
 
+// Global hibernation defaults (see ViewManager.checkIdleViews) — same
+// get/set-with-fallback shape as theme above, no migration needed since
+// every existing install just falls back to the safe defaults (protected
+// apps, tabs still hibernate) until the user visits the settings page.
+function getHibernationMode() {
+  return store.get('hibernationMode', 'opt-in');
+}
+
+function setHibernationMode(mode) {
+  store.set('hibernationMode', mode);
+}
+
+function getHibernateTabsEnabled() {
+  return store.get('hibernateTabsEnabled', true);
+}
+
+function setHibernateTabsEnabled(enabled) {
+  store.set('hibernateTabsEnabled', enabled);
+}
+
+function getHibernationIdleMinutes() {
+  return store.get('hibernationIdleMinutes', 20);
+}
+
+function setHibernationIdleMinutes(minutes) {
+  store.set('hibernationIdleMinutes', minutes);
+}
+
 function getGroups() {
   return store.get('groups');
 }
@@ -214,6 +242,15 @@ function updateAppMeta(appId, partial) {
 // app is on, doesn't get treated as re-pinning the app somewhere new.
 function updateAppLastUrl(appId, lastUrl) {
   setApps(getApps().map((app) => (app.id === appId ? { ...app, lastUrl } : app)));
+}
+
+// Per-app override of the global hibernation mode above — 'default'
+// (inherit whatever getHibernationMode() says), 'always' (hibernate this
+// app when idle regardless of the global mode), or 'never' (protect it
+// regardless). Absent entirely on every app until the user visits the
+// hibernation settings page, which reads that the same way as 'default'.
+function setAppHibernatePolicy(appId, policy) {
+  setApps(getApps().map((app) => (app.id === appId ? { ...app, hibernatePolicy: policy } : app)));
 }
 
 // --- Sidebar order: the single source of truth for top-level sidebar item
@@ -457,6 +494,7 @@ module.exports = {
   updateAppUrl,
   updateAppMeta,
   updateAppLastUrl,
+  setAppHibernatePolicy,
   removeApp,
   getSidebarOrder,
   setSidebarOrder,
@@ -476,5 +514,11 @@ module.exports = {
   resolveAppUrl,
   getThemePreference,
   setThemePreference,
+  getHibernationMode,
+  setHibernationMode,
+  getHibernateTabsEnabled,
+  setHibernateTabsEnabled,
+  getHibernationIdleMinutes,
+  setHibernationIdleMinutes,
   SEARCH_ENGINE_ROOT_DOMAINS,
 };

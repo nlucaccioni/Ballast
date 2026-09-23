@@ -1,20 +1,37 @@
 const { REPORT_UNREAD } = require('../renderer/shared/ipc-channels');
 
+// A count-bearing Gmail title (e.g. "Inbox (3) - Gmail") only appears on a
+// list view (inbox/label/search/etc.) — opening a single thread swaps the
+// title for that message's subject instead, with no count at all. That
+// makes a bare "no count" title ambiguous on its own: it means either
+// "genuinely zero unread" or "a thread is open right now", and those need
+// opposite handling (the former should zero the badge, the latter should
+// leave it alone). The hash disambiguates them, since only list views use
+// one of these forms — anything else (a thread's own hash, settings, etc.)
+// is assumed to be a non-list view and ignored.
+const GMAIL_LIST_HASH = /^#(?:inbox|starred|snoozed|sent|drafts|all|spam|trash|important|chats)(?:\/p\d+)?$|^#label\/[^/]+$|^#search\/[^/]*$/;
+
 // Strategy: title-count — e.g. document.title becomes "Inbox (3) - Gmail".
-// Only the count-bearing case updates the badge; a title with no count is
-// ignored rather than treated as zero. Gmail (and presumably others using
-// this strategy) only includes the count while showing the inbox/list view
-// — opening a single message swaps the title for that message's subject
-// instead, with no count at all, which was zeroing the badge just from
-// opening an email rather than from it actually being read. The trade-off:
-// since Gmail also drops the count entirely once truly back to zero
-// unread (the same "no count" title as reading a message), the badge can
-// stay stale-but-nonzero for a moment after the last unread item is
-// cleared, until the next count-bearing title comes along.
+// The count-bearing case always updates the badge. A title with no count is
+// otherwise ignored (stays stale) rather than treated as zero, since for
+// most apps using this strategy there's no way to tell "zero unread" apart
+// from "not currently showing a count for some other reason" — except
+// Gmail specifically, where the hash resolves that ambiguity (see
+// GMAIL_LIST_HASH above), so a bare title there can confidently mean zero.
 function watchTitleCount(view, onChange) {
   view.webContents.on('page-title-updated', (event, title) => {
     const match = title.match(/\((\d+)\)/);
-    if (match) onChange(parseInt(match[1], 10));
+    if (match) {
+      onChange(parseInt(match[1], 10));
+      return;
+    }
+    let url;
+    try {
+      url = new URL(view.webContents.getURL());
+    } catch {
+      return;
+    }
+    if (url.hostname === 'mail.google.com' && GMAIL_LIST_HASH.test(url.hash)) onChange(0);
   });
 }
 

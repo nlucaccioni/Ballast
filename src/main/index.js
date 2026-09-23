@@ -85,7 +85,23 @@ const appMenu = Menu.buildFromTemplate([
   // the `let viewManager` below instead, which is fine since a real click
   // can't happen until well after createWindow() has assigned it.
   { label: 'Manage site permissions...', click: () => viewManager.openPermissionsPage() },
+  // A bare '&' is a mnemonic-underline marker in a native Windows menu, not
+  // a literal character — it gets consumed rather than displayed unless
+  // escaped as '&&', which is what was leaving a double space here.
+  { label: 'Memory && hibernation...', click: () => viewManager.openHibernationPage() },
   { type: 'separator' },
+  // Dev-only aid for the Discord badge investigation — role: 'toggleDevTools'
+  // below only ever targets mainWindow's own webContents (the sidebar), never
+  // a pinned app's WebContentsView, so there's no other way to get DevTools
+  // scoped to what Discord's own page is actually doing. app.isPackaged is
+  // false for `electron .`/`npm start` and true for an installed/built copy,
+  // so this stays available locally without shipping in a release.
+  ...(app.isPackaged
+    ? []
+    : [
+        { label: 'Open DevTools for active app (debug)', click: () => viewManager.openDevToolsForActive() },
+        { type: 'separator' },
+      ]),
   { role: 'reload' },
   { role: 'forceReload' },
   { role: 'toggleDevTools' },

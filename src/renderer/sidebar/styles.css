@@ -347,6 +347,15 @@ body.platform-darwin #tab-strip {
   opacity: 0.4;
 }
 
+/* Hibernated (idle, view unloaded to reclaim memory — see
+   ViewManager.hibernateApp) — favicon/badge still render from cached
+   meta as usual, just visually muted so it reads as "asleep" rather than
+   "gone". Clicking it wakes it the same as any first-time app launch. */
+.app-button.hibernated {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+
 /* A quick pop on switch — plain feedback on the sidebar icon itself
    (cheap, ordinary CSS) rather than animating the actual app-content
    transition, which would mean either snapshotting the outgoing

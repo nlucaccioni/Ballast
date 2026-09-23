@@ -1,6 +1,6 @@
 {
   "name": "ballast",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
   "description": "A Station/Wavebox-style Electron app for pinning and switching between isolated web apps.",
   "main": "src/main/index.js",

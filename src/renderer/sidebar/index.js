@@ -453,6 +453,7 @@ window.electronAPI.onAppsChanged(() => refreshLayout());
 // --- App buttons: meta rendering shared between standalone and grouped ---
 
 function applyAppMeta(button, app) {
+  button.classList.toggle('hibernated', !!app.hibernated);
   button.replaceChildren();
   if (app.faviconUrl) {
     const img = document.createElement('img');
