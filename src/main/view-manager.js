@@ -808,8 +808,16 @@ class ViewManager {
       this.maybeGraduateFromSearch(app.id, url);
       configStore.updateAppLastUrl(app.id, url);
     });
-    view.webContents.on('did-navigate-in-page', () => {
+    view.webContents.on('did-navigate-in-page', (event, url, isMainFrame) => {
       if (this.focusedView === view) this.emitNavStateForFocused();
+      // Gmail (and similar SPAs) move between inbox/thread/folder views via
+      // hash changes, which only fire this event, never 'did-navigate' above
+      // — without this, lastUrl stays frozen at whatever full navigation
+      // happened to land on last (e.g. a deep-linked thread from an early
+      // redirect), and never updates again even after the user's back at
+      // the inbox. isMainFrame guards against iframes within the page (ads,
+      // embeds) also firing this and clobbering it with their own url.
+      if (isMainFrame) configStore.updateAppLastUrl(app.id, url);
     });
 
     this.views.set(app.id, view);
@@ -856,8 +864,10 @@ class ViewManager {
       // not just where it started.
       this.updateTabMeta(appId, tab.id, { url });
     });
-    view.webContents.on('did-navigate-in-page', () => {
+    view.webContents.on('did-navigate-in-page', (event, url, isMainFrame) => {
       if (this.focusedView === view) this.emitNavStateForFocused();
+      // Same hash-only-navigation gap as getOrCreate's own handler above.
+      if (isMainFrame) this.updateTabMeta(appId, tab.id, { url });
     });
 
     this.tabViews.set(tab.id, view);
