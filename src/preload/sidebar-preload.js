@@ -88,7 +88,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   openTabMenu: (appId, tabId, position) =>
     ipcRenderer.send('tab-menu:show', { appId, tabId, x: position.x, y: position.y }),
+  openNewTabMenu: (appId, position) => ipcRenderer.send('tab-menu:show-new', { appId, x: position.x, y: position.y }),
   closeTabMenu: () => ipcRenderer.send('tab-menu:hide'),
+  onTabMenuClosed: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('tab-menu:closed', listener);
+    return () => ipcRenderer.removeListener('tab-menu:closed', listener);
+  },
   openTabContextMenu: (appId, tabId, position) =>
     ipcRenderer.send('tabs:context-menu', { appId, tabId, x: position.x, y: position.y }),
   onAppsChanged: (callback) => {

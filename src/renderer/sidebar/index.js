@@ -146,6 +146,40 @@ function closeIconSvg() {
   );
 }
 
+// A manual counterpart to the automatic tab creation attachWindowOpenHandler
+// (main/view-manager.js) does for links — lets the user open one themselves.
+// Built once and re-appended after every renderTabStrip() rebuild (that
+// function's own replaceChildren() detaches it each time) rather than
+// rebuilt from scratch, same as the tab chips would be if they had
+// per-render state worth preserving. A real flex child of #tab-strip
+// (flex-shrink: 0 in styles.css) rather than a sibling after it, so the
+// secondary tabs' own shrink-to-fit rule shares space with it automatically.
+const newTabButton = document.createElement('button');
+newTabButton.id = 'new-tab-button';
+newTabButton.type = 'button';
+newTabButton.innerHTML =
+  '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M5 12h14" /><path d="M12 5v14" /></svg>';
+attachTooltip(newTabButton, () => ({ title: 'New tab' }));
+newTabButton.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!activeAppId) return;
+  // Toggles closed on a second click, same as re-clicking an already-active
+  // chip does (see handleChipClick) — NEW_TAB_MENU_KEY is a tabMenuOpenKey
+  // value real tab ids (generateTabId's 'tab-...' ones) never collide with.
+  if (tabMenuOpenKey === NEW_TAB_MENU_KEY) {
+    window.electronAPI.closeTabMenu();
+    tabMenuOpenKey = undefined;
+    return;
+  }
+  const rect = newTabButton.getBoundingClientRect();
+  window.electronAPI.openNewTabMenu(activeAppId, {
+    x: Math.round(rect.left + rect.width / 2),
+    y: Math.round(rect.bottom),
+  });
+  tabMenuOpenKey = NEW_TAB_MENU_KEY;
+});
+
 function buildTabChip({ label, faviconUrl, isActive, onSelect, onContextMenu, onClose }) {
   const chip = document.createElement('button');
   chip.className = isActive ? 'tab-chip active' : 'tab-chip';
@@ -191,9 +225,21 @@ function buildTabChip({ label, faviconUrl, isActive, onSelect, onContextMenu, on
 // (see view-manager.js), kept in sync via onActiveViewChanged below, so a
 // second click on the same already-active chip toggles it closed rather than
 // re-opening what's already open.
-// undefined = no menu open; null = the primary chip's; else a tab id —
-// mirrors main's own ViewManager.tabMenuContext.tabId representation.
+// undefined = no menu open; null = the primary chip's; NEW_TAB_MENU_KEY = the
+// tab strip's own "+" button's; else a tab id — mirrors main's own
+// ViewManager.tabMenuContext.tabId/isNewTab representation.
+const NEW_TAB_MENU_KEY = 'new';
 let tabMenuOpenKey;
+// Main closes the tab menu on its own for reasons this page can't see
+// directly (a click landing in a pinned app's own WebContentsView — a
+// separate native view entirely — is what this is really for, but it
+// covers every closing path uniformly: submit, toggle-close, clicking away
+// in the sidebar too), so it pushes this rather than the sidebar guessing
+// from its own click events. See ViewManager.closeTabMenu/its 'blur'
+// listener on the overlay itself.
+window.electronAPI.onTabMenuClosed(() => {
+  tabMenuOpenKey = undefined;
+});
 
 // Whether the group color/label popover is currently open — set via a main
 // push (GROUP_MENU_OPENED) rather than at its trigger site directly, since
@@ -425,6 +471,8 @@ function renderTabStrip() {
     attachTabDragHandlers(chip, tab);
     tabStripEl.appendChild(chip);
   });
+
+  tabStripEl.appendChild(newTabButton);
 }
 
 window.electronAPI.onTabsChanged(({ appId, tabs }) => {
@@ -441,10 +489,6 @@ window.electronAPI.onTabsChanged(({ appId, tabs }) => {
 window.electronAPI.onActiveViewChanged(({ appId, tabId }) => {
   if (appId && appId !== activeAppId) setActive(appId);
   activeTabId = tabId;
-  // Focus moved away from whichever chip the menu was open for — main
-  // closes it automatically in that case (see ViewManager.setFocusedView),
-  // so this mirror needs to follow rather than assume it's still open.
-  if (tabMenuOpenKey !== undefined && tabMenuOpenKey !== tabId) tabMenuOpenKey = undefined;
   renderTabStrip();
 });
 

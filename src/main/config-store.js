@@ -253,6 +253,14 @@ function setAppHibernatePolicy(appId, policy) {
   setApps(getApps().map((app) => (app.id === appId ? { ...app, hibernatePolicy: policy } : app)));
 }
 
+// "Mute sound" in the app's right-click menu — applies webContents'
+// built-in audio-muting (see ViewManager.getOrCreate/setAppAudioMuted)
+// rather than anything permission-related, so it's a hard mute regardless
+// of what the page itself thinks its audio permissions are.
+function setAppAudioMuted(appId, muted) {
+  setApps(getApps().map((app) => (app.id === appId ? { ...app, audioMuted: muted } : app)));
+}
+
 // --- Sidebar order: the single source of truth for top-level sidebar item
 // order (apps.json order / groups[].appIds order no longer drive rendering
 // order — this interleaves standalone apps and group containers). Each
@@ -495,6 +503,7 @@ module.exports = {
   updateAppMeta,
   updateAppLastUrl,
   setAppHibernatePolicy,
+  setAppAudioMuted,
   removeApp,
   getSidebarOrder,
   setSidebarOrder,

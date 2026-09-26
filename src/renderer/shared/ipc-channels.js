@@ -33,7 +33,9 @@ module.exports = {
   TABS_CHANGED: 'tabs:changed', // main -> renderer push (a tab opened/closed, or one's title/favicon updated)
   ACTIVE_VIEW_CHANGED: 'view:active-changed', // main -> renderer push, e.g. a link click opened a new tab
   OPEN_TAB_MENU: 'tab-menu:show', // sidebar -> main, clicking an already-active tab chip
+  OPEN_NEW_TAB_MENU: 'tab-menu:show-new', // sidebar -> main, the tab strip's own "+" button
   CLOSE_TAB_MENU: 'tab-menu:hide', // sidebar -> main
+  TAB_MENU_CLOSED: 'tab-menu:closed', // main -> renderer push; the overlay closed for *any* reason (submit, toggle-close, clicking away in the sidebar or in a pinned app's own view, switching focus elsewhere) — keeps the sidebar's tabMenuOpenKey mirror from going stale when main closes it on its own (see ViewManager.closeTabMenu)
   OPEN_TAB_CONTEXT_MENU: 'tabs:context-menu', // sidebar -> main, right-clicking a chip (any chip, active or not)
   APPS_CHANGED: 'app:list-changed', // main -> renderer push; a new app was pinned outside a direct sidebar request (see ViewManager.tabMenuPromote), or a group's color changed
   GET_THEME: 'app:get-theme', // sidebar -> main, for initial state on load

@@ -1,6 +1,7 @@
 const { ipcMain, Menu } = require('electron');
 const channels = require('../renderer/shared/ipc-channels');
 const configStore = require('./config-store');
+const { getAppPermissionState, setAppPermissionState } = require('./session-manager');
 
 function registerIpcHandlers(viewManager, mainWindow, appMenu) {
   ipcMain.handle(channels.GET_APPS, () => ({
@@ -82,6 +83,7 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
 
   ipcMain.on(channels.OPEN_APP_CONTEXT_MENU, (event, { appId, x, y, inGroup }) => {
     const group = inGroup ? configStore.getGroups().find((g) => g.appIds.includes(appId)) : null;
+    const app = configStore.getApp(appId);
     const contextMenu = Menu.buildFromTemplate([
       ...(inGroup
         ? [
@@ -97,6 +99,33 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
       },
       { type: 'separator' },
       { label: 'Site permissions...', click: () => viewManager.openPermissionMenu(appId, x, y) },
+      // A quick shortcut for the one permission most worth muting in a
+      // hurry — same underlying 'notifications' grant the Site permissions
+      // popover's own toggle controls (see session-manager.js), just
+      // surfaced directly here instead of needing two more clicks to get
+      // to it. Toggles back to 'ask' rather than 'allow', matching what an
+      // untouched permission already looks like.
+      {
+        label: 'Mute notifications',
+        type: 'checkbox',
+        checked: !!app && getAppPermissionState(app, 'notifications') === 'block',
+        enabled: !!app,
+        click: () => {
+          if (!app) return;
+          const next = getAppPermissionState(app, 'notifications') === 'block' ? 'ask' : 'block';
+          setAppPermissionState(app, 'notifications', next);
+        },
+      },
+      // Plain webContents-level audio muting — unrelated to the permission
+      // grant above, so this mutes even a page that never asked to play
+      // sound in the first place (notification dings, autoplay video, etc).
+      {
+        label: 'Mute sound',
+        type: 'checkbox',
+        checked: !!app?.audioMuted,
+        enabled: !!app,
+        click: () => viewManager.setAppAudioMuted(appId, !app.audioMuted),
+      },
       // Disabled when there's nothing loaded to hibernate (already
       // hibernated) or it's the one currently on screen (hibernateApp
       // itself guards this too, but greying it out here says why up front
@@ -147,6 +176,7 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
   });
 
   ipcMain.on(channels.OPEN_TAB_MENU, (event, { appId, tabId, x, y }) => viewManager.openTabMenu(appId, tabId, x, y));
+  ipcMain.on(channels.OPEN_NEW_TAB_MENU, (event, { appId, x, y }) => viewManager.openNewTabMenu(appId, x, y));
   ipcMain.on(channels.CLOSE_TAB_MENU, () => viewManager.closeTabMenu());
 
   // Plain OS right-click menu — doesn't switch focus to the chip first,

@@ -1,17 +1,26 @@
 const menu = document.getElementById('menu');
 const urlForm = document.getElementById('url-form');
 const urlInput = document.getElementById('url-input');
+const duplicateBtn = document.getElementById('duplicate-btn');
 const promoteBtn = document.getElementById('promote-btn');
 const setPrimaryBtn = document.getElementById('set-primary-btn');
+const externalBtn = document.getElementById('external-btn');
 
-window.tabMenuAPI.onOpen(({ url, isPrimary }) => {
+window.tabMenuAPI.onOpen(({ url, isPrimary, isNewTab }) => {
   urlInput.value = url;
-  // "Open as new app" and "Set as primary" only make sense for a secondary
-  // tab — the primary view is already the app, and can't be set as itself.
-  promoteBtn.hidden = isPrimary;
-  setPrimaryBtn.hidden = isPrimary;
+  urlInput.placeholder = isNewTab ? 'Search or enter address' : '';
+  // None of these act on an existing view/tab, which a brand new one isn't
+  // yet — see openNewTabMenu in main/view-manager.js. Otherwise, "Open as
+  // new app" and "Set as primary" only make sense for a secondary tab — the
+  // primary view is already the app, and can't be set as itself.
+  duplicateBtn.hidden = !!isNewTab;
+  promoteBtn.hidden = isNewTab || isPrimary;
+  setPrimaryBtn.hidden = isNewTab || isPrimary;
+  externalBtn.hidden = !!isNewTab;
 
   requestAnimationFrame(() => menu.classList.add('visible'));
+  urlInput.focus();
+  urlInput.select();
 });
 
 window.tabMenuAPI.onClose(() => {

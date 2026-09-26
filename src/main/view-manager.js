@@ -20,6 +20,7 @@ const {
   APPS_CHANGED,
   GROUP_MENU_OPENED,
   PERMISSION_MENU_OPENED,
+  TAB_MENU_CLOSED,
 } = require('../renderer/shared/ipc-channels');
 
 const SIDEBAR_WIDTH = 54; // adjust to final design; must match --sidebar-width in sidebar/styles.css
@@ -52,9 +53,10 @@ const TAB_MENU_ROW_HEIGHT = 30;
 const TAB_MENU_GAP = 6;
 const TAB_MENU_PADDING = 8;
 // Rows below the URL field: primary view only offers duplicate/open-
-// externally; a tab also offers promoting itself to an app or to primary.
-function tabMenuHeight(isPrimary) {
-  const actionRows = isPrimary ? 2 : 4;
+// externally (2); a tab also offers promoting itself to an app or to
+// primary (4); the "new tab" flavor (see openNewTabMenu) offers none of
+// these — there's no existing view yet to act on — just the field itself.
+function tabMenuHeight(actionRows) {
   const rows = 1 + actionRows; // + the URL field itself
   return TAB_MENU_PADDING * 2 + rows * TAB_MENU_ROW_HEIGHT + (rows - 1) * TAB_MENU_GAP;
 }
@@ -203,6 +205,15 @@ class ViewManager {
     this.tabMenuOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.tabMenuOverlay));
     this.win.contentView.addChildView(this.tabMenuOverlay);
     this.tabMenuContext = null; // { appId, tabId } while open, else null
+    // positionTabMenu gives this real OS focus on open (see its own
+    // comment for why) — 'blur' is what then tells us the user clicked
+    // away, wherever that click actually landed: a pinned app's own
+    // WebContentsView (a separate native view the sidebar's own click
+    // handlers have no visibility into at all), the sidebar itself, even
+    // switching to a different OS window entirely all blur this the same
+    // way. A much more general signal than trying to listen for clicks
+    // everywhere they could happen.
+    this.tabMenuOverlay.webContents.on('blur', () => this.closeTabMenu());
 
     // Same technique again for a group's color/label popover — see
     // openGroupMenu.
@@ -324,6 +335,23 @@ class ViewManager {
     this.tooltipOverlay.webContents.send('tooltip:update', { visible: false });
   }
 
+  // Shared by openTabMenu/openNewTabMenu below — centers the overlay under
+  // (x, the trigger's own horizontal midpoint) y (its bottom edge), clamped
+  // so it can't run off either side of the window, and gives it real OS
+  // keyboard focus so the URL field is immediately typeable — a WebContentsView
+  // doesn't get that just from being made visible/positioned on screen, it's
+  // a separate native view from whatever had focus before (the sidebar,
+  // typically), and index.js's own urlInput.focus() call is a no-op without
+  // this: focusing a page's own <input> can't itself pull OS-level focus
+  // over to the WebContentsView that page is in.
+  positionTabMenu(x, y, height) {
+    const [contentWidth] = this.win.getContentSize();
+    const centeredX = Math.round(x) - TAB_MENU_WIDTH / 2;
+    const clampedX = Math.max(8, Math.min(centeredX, contentWidth - TAB_MENU_WIDTH - 8));
+    this.tabMenuOverlay.setBounds({ x: clampedX, y: Math.round(y) + 4, width: TAB_MENU_WIDTH, height });
+    this.tabMenuOverlay.webContents.focus();
+  }
+
   // Opened by clicking a chip that's already active (see sidebar index.js)
   // — the app's own primary chip or one of its tabs — a small menu
   // centered below it for editing the current URL directly, duplicating
@@ -344,22 +372,30 @@ class ViewManager {
     }
 
     this.tabMenuContext = { appId, tabId: isPrimary ? null : tabId };
-    const [contentWidth] = this.win.getContentSize();
-    const centeredX = Math.round(x) - TAB_MENU_WIDTH / 2;
-    const clampedX = Math.max(8, Math.min(centeredX, contentWidth - TAB_MENU_WIDTH - 8));
-    this.tabMenuOverlay.setBounds({
-      x: clampedX,
-      y: Math.round(y) + 4,
-      width: TAB_MENU_WIDTH,
-      height: tabMenuHeight(isPrimary),
-    });
+    this.positionTabMenu(x, y, tabMenuHeight(isPrimary ? 2 : 4));
     this.tabMenuOverlay.webContents.send('tab-menu:open', { url, isPrimary });
+    this.raiseOverlays();
+  }
+
+  // The tab strip's own "+" button (see sidebar index.js) — same overlay as
+  // openTabMenu above, positioned the same way, but with no existing
+  // view/tab to show a URL for or act on: an empty field, none of the
+  // duplicate/promote/set-primary/open-externally actions (see
+  // tab-menu/index.js's onOpen), and submitting it creates a brand new tab
+  // instead of navigating one that already exists (see tabMenuNavigate's
+  // own isNewTab branch).
+  openNewTabMenu(appId, x, y) {
+    if (!configStore.getApp(appId)) return;
+    this.tabMenuContext = { appId, tabId: null, isNewTab: true };
+    this.positionTabMenu(x, y, tabMenuHeight(0));
+    this.tabMenuOverlay.webContents.send('tab-menu:open', { url: '', isPrimary: true, isNewTab: true });
     this.raiseOverlays();
   }
 
   closeTabMenu() {
     this.tabMenuContext = null;
     this.tabMenuOverlay.webContents.send('tab-menu:close');
+    this.win.webContents.send(TAB_MENU_CLOSED);
     // Parked off-screen at a real size rather than collapsed to 0x0 — a
     // zero-size WebContentsView appears to stop compositing updates
     // entirely while hidden, which silently swallowed the animation-reset
@@ -368,7 +404,7 @@ class ViewManager {
     // still the old fully-visible one. Keeping a real, constant viewport
     // size — just off the visible window — keeps it rendering normally
     // the whole time it's "closed".
-    this.tabMenuOverlay.setBounds({ x: -10000, y: -10000, width: TAB_MENU_WIDTH, height: tabMenuHeight(false) });
+    this.tabMenuOverlay.setBounds({ x: -10000, y: -10000, width: TAB_MENU_WIDTH, height: tabMenuHeight(4) });
   }
 
   // Opened by right-clicking either a group's own empty container space or,
@@ -717,8 +753,13 @@ class ViewManager {
     const ctx = this.tabMenuContext;
     this.closeTabMenu();
     if (!ctx) return;
+    const resolvedUrl = configStore.resolveAppUrl(rawUrl);
+    if (ctx.isNewTab) {
+      this.openTab(ctx.appId, { url: resolvedUrl });
+      return;
+    }
     const target = this.resolveTarget(ctx.appId, ctx.tabId);
-    if (target) target.view.webContents.loadURL(configStore.resolveAppUrl(rawUrl));
+    if (target) target.view.webContents.loadURL(resolvedUrl);
   }
 
   tabMenuDuplicate() {
@@ -905,6 +946,7 @@ class ViewManager {
       },
     });
     view.webContents.setUserAgent(DESKTOP_USER_AGENT);
+    view.webContents.setAudioMuted(!!app.audioMuted);
     // Reopens wherever this app was last left (e.g. which Google account
     // slot a Gmail app was on), falling back to the pinned URL the first
     // time an app is ever opened.
@@ -1166,6 +1208,16 @@ class ViewManager {
     this.views.delete(appId);
     this.lastFocusedAt.delete(appId);
     this.updateMeta(appId, { hibernated: true });
+  }
+
+  // "Mute sound" in the app's right-click menu — persists the choice (see
+  // getOrCreate, which applies it to a freshly (re)created view too, e.g.
+  // after waking from hibernation) and, if the view is already loaded,
+  // applies it immediately via webContents' own audio-muting rather than
+  // waiting for a reload.
+  setAppAudioMuted(appId, muted) {
+    configStore.setAppAudioMuted(appId, muted);
+    this.views.get(appId)?.webContents.setAudioMuted(muted);
   }
 
   hibernateTab(tabId) {
