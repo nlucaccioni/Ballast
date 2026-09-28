@@ -3,7 +3,8 @@
 A Station/Wavebox-style desktop app: a sidebar of pinned web apps (Gmail, Slack,
 Calendar, etc.), each isolated in its own session, with support for grouping
 related apps together, live favicons, unread badges, and account sharing
-across apps from the same provider.
+across apps from the same provider — plus per-app browser-style tabs, mute
+and memory-hibernation controls, and light/dark theming.
 
 Built with Electron.
 
@@ -44,8 +45,14 @@ after that) and either:
 
 Apps on the same root domain (e.g. `mail.google.com` and
 `calendar.google.com`) automatically share a login session. Drag one app
-icon onto another to group them into a single sidebar slot; right-click an
-icon to remove it from its group or from the sidebar entirely.
+icon onto another to group them into a single sidebar slot — right-click a
+group to give it a custom name and color, or right-click an app to remove
+it from its group or the sidebar entirely.
+
+## More features
+
+Browser-style tabs, per-app mute controls, memory hibernation for idle
+apps, site permissions, light/dark/system theming, and auto-updates.
 
 ## Project layout
 
@@ -60,4 +67,4 @@ icon to remove it from its group or from the sidebar entirely.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GPLv3 — see [LICENSE](LICENSE).
