@@ -890,6 +890,31 @@ class ViewManager {
         // which acts on whatever webContents Electron considers focused)
         // guarantees this targets the exact view that was right-clicked.
         if (items.length) items.push({ type: 'separator' });
+        // Electron detects the misspelling and underlines it on its own
+        // (session.spellCheckerEnabled defaults to true) — but unlike its
+        // built-in context menu, rebuilding this one ourselves means we
+        // have to surface the suggestions/add-to-dictionary actions
+        // ourselves too, or a right-click on a misspelled word silently
+        // loses them despite the underline still being there.
+        if (params.misspelledWord) {
+          if (params.dictionarySuggestions.length) {
+            items.push(
+              ...params.dictionarySuggestions.map((suggestion) => ({
+                label: suggestion,
+                click: () => view.webContents.replaceMisspelling(suggestion),
+              }))
+            );
+          } else {
+            items.push({ label: 'No spelling suggestions', enabled: false });
+          }
+          items.push(
+            {
+              label: 'Add to dictionary',
+              click: () => view.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
+            },
+            { type: 'separator' }
+          );
+        }
         items.push(
           { label: 'Undo', enabled: params.editFlags.canUndo, click: () => view.webContents.undo() },
           { label: 'Redo', enabled: params.editFlags.canRedo, click: () => view.webContents.redo() },
