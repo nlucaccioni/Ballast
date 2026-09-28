@@ -180,6 +180,12 @@ newTabButton.addEventListener('click', (e) => {
   tabMenuOpenKey = NEW_TAB_MENU_KEY;
 });
 
+// Fills whatever width the chips/button don't use — see its own rule in
+// styles.css for why this, not #tab-strip itself, is what's draggable.
+// Built once and re-appended each render, same as newTabButton above.
+const tabStripDragSpacer = document.createElement('div');
+tabStripDragSpacer.id = 'tab-strip-drag-spacer';
+
 function buildTabChip({ label, faviconUrl, isActive, onSelect, onContextMenu, onClose }) {
   const chip = document.createElement('button');
   chip.className = isActive ? 'tab-chip active' : 'tab-chip';
@@ -473,6 +479,7 @@ function renderTabStrip() {
   });
 
   tabStripEl.appendChild(newTabButton);
+  tabStripEl.appendChild(tabStripDragSpacer);
 }
 
 window.electronAPI.onTabsChanged(({ appId, tabs }) => {

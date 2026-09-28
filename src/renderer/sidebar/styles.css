@@ -176,11 +176,33 @@ body.platform-darwin #nav-controls {
   align-items: center;
   gap: 4px;
   overflow: hidden;
-  /* Deliberately left as the inherited "drag" from #titlebar — only the
-     chip buttons themselves opt out below, so the empty space around and
-     between them (most of this container, most of the time) still drags
-     the window, the same as clicking empty titlebar space next to a tab
-     in a real browser. */
+  /* This used to be left as the inherited "drag" from #titlebar, with only
+     the chip buttons themselves opting out — every chip was then a small
+     no-drag island surrounded by drag on all sides. At fractional Windows
+     display scaling (125%/150%/...), Chromium's CSS-px-to-device-px
+     rounding for the native draggable-region hit-test can land a no-drag
+     island's edge a fraction of a device pixel off from where its element
+     actually is, and the sliver left over reverts to the ancestor's "drag"
+     — reported as a tab whose hoverable/clickable area had shrunk to
+     "1px high". Making the whole strip no-drag removes that boundary
+     entirely: every chip now matches its container instead of being an
+     island inside it. #tab-strip-drag-spacer below (a real flex child, not
+     this element) is what restores "click empty tab-strip space to drag
+     the window" — see its own comment. */
+  -webkit-app-region: no-drag;
+}
+
+/* Restores "click empty tab-strip space to drag the window" (a real
+   browser convention) without reintroducing #tab-strip's old fragile
+   "many no-drag islands inside one drag region" shape (see #tab-strip's
+   own comment) — this is the ONLY drag region left in the strip, a single
+   flex child that simply soaks up whatever width the chips/button don't
+   use, appended last in renderTabStrip(). One clean boundary against
+   #new-tab-button's right edge instead of several per chip. */
+#tab-strip-drag-spacer {
+  flex: 1 1 auto;
+  height: 100%;
+  -webkit-app-region: drag;
 }
 
 body.platform-darwin #tab-strip {
@@ -202,16 +224,18 @@ body.platform-darwin #tab-strip {
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
-  /* Chromium computes the native draggable region by walking individual
-     elements' own boxes, not by treating a no-drag flex container as
-     covering its whole rendered area — a child (favicon/title/close) that
-     only inherits this rather than declaring it itself can end up still
-     being hit-tested as the ancestor #titlebar's "drag" region for real OS
-     mouse input, even though it visually sits inside this no-drag button
-     (see each of those rules below, which is why they repeat this). A
-     synthetic click (e.g. CDP's Input.dispatchMouseEvent) bypasses that
-     native hit-test entirely, so this only breaks for a real physical
-     mouse — nothing to see wrong in the page's own layout/DOM. */
+  /* #tab-strip (this button's parent) is no-drag itself now, so this is
+     belt-and-suspenders rather than load-bearing — but Chromium computes
+     the native draggable region by walking individual elements' own
+     boxes, not by treating a no-drag flex container as covering its whole
+     rendered area, so a child (favicon/title/close) that only inherits
+     this rather than declaring it itself has in the past ended up still
+     hit-tested as a surrounding "drag" region for real OS mouse input
+     (see each of those rules below, which is why they repeat this, and
+     #tab-strip's own comment for the fuller history). A synthetic click
+     (e.g. CDP's Input.dispatchMouseEvent) bypasses that native hit-test
+     entirely, so this only ever breaks for a real physical mouse —
+     nothing to see wrong in the page's own layout/DOM. */
   -webkit-app-region: no-drag;
 }
 
@@ -317,10 +341,13 @@ body.platform-darwin #tab-strip {
   display: flex;
   align-items: center;
   justify-content: center;
-  /* #titlebar (its ancestor) is a drag region by default — every other
-     interactive element in it (hamburger-button, nav-controls, .tab-chip)
-     explicitly opts out the same way; missing this is exactly why a click
-     here was being swallowed as a window-drag gesture instead of firing. */
+  /* #tab-strip (its parent) is no-drag itself, so this is redundant with
+     it today — kept anyway, both as documentation (every interactive
+     titlebar element declares this explicitly: hamburger-button,
+     nav-controls, .tab-chip) and because missing it here specifically is
+     exactly why a click on this button was once being swallowed as a
+     window-drag gesture instead of firing, back when #tab-strip was still
+     a drag region by default (see #tab-strip's own comment). */
   -webkit-app-region: no-drag;
 }
 
