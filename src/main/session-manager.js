@@ -165,7 +165,15 @@ function configurePermissions(partitionSession, partitionName, win) {
   });
 
   partitionSession.setPermissionCheckHandler((webContents, permission, requestingOrigin) => {
-    const key = grantKey(partitionName, requestingOrigin, permission);
+    // Chromium hands this an origin *URL* with a trailing slash
+    // ("https://app.slack.com/"), not the bare origin the request handler
+    // above stores grants under — normalize it, or the lookup always misses
+    // and an Allowed mic still reads as denied here. That's what collapses
+    // a page's microphone list to a single unlabeled "Default" entry and
+    // makes navigator.permissions report "denied" despite the grant.
+    const origin = originFromUrl(requestingOrigin);
+    if (!origin) return false;
+    const key = grantKey(partitionName, origin, permission);
     const grants = loadGrants();
     if (key in grants) return grants[key];
     return !PROMPT_PERMISSIONS.has(permission) && !DENY_PERMISSIONS.has(permission);
