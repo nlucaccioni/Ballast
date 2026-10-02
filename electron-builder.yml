@@ -27,8 +27,8 @@ publish:
 
 # A single 1024x1024 source PNG is enough — electron-builder generates the
 # platform-specific .ico/.icns from it during the build, no pre-conversion
-# needed. Applies to both win/mac below (each target's own `icon` key isn't
-# set, so both fall back to this shared one).
+# needed. Used as-is on Windows; mac overrides it with its own tiled
+# version (see mac.icon below).
 icon: assets/icons/Ballast_Icon.png
 
 win:
@@ -63,6 +63,13 @@ nsis:
 # Apple Developer Program and wiring up real CSC_LINK/APPLE_ID secrets plus
 # notarization in the release workflow.
 mac:
+  # The shared icon's B placed on a white rounded-square tile per Apple's
+  # icon grid (824px tile + drop shadow on the 1024 canvas). The bare,
+  # edge-to-edge B reads as oversized and out of place next to other
+  # Dock/Launchpad icons, which are almost all filled tiles; newer macOS
+  # versions may also box non-tile icons in a grey squircle of their own.
+  # Windows keeps the bare B.
+  icon: assets/icons/Ballast_Icon_mac.png
   identity: "-"
   target:
     - target: dmg
