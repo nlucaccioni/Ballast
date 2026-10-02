@@ -333,6 +333,13 @@ class ViewManager {
 
   hideTooltip() {
     this.tooltipOverlay.webContents.send('tooltip:update', { visible: false });
+    // Hiding the tooltip's HTML isn't enough on its own: the overlay view
+    // itself is still a native view stacked above the app view, and a
+    // transparent one still swallows the mouse — left in place, it silently
+    // kills hover/clicks across a 260px-wide strip of whatever page is
+    // underneath (e.g. Slack's channel list, right beside the sidebar). Park
+    // it offscreen like every other overlay's close path does.
+    this.tooltipOverlay.setBounds({ x: -10000, y: -10000, width: TOOLTIP_WIDTH, height: TOOLTIP_HEIGHT });
   }
 
   // Shared by openTabMenu/openNewTabMenu below — centers the overlay under
