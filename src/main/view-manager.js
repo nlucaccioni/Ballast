@@ -998,6 +998,9 @@ class ViewManager {
       watchTitleCount(view, (count) => this.updateUnread(app.id, count));
     }
     watchAppBadge(view, (count) => this.updateUnread(app.id, count));
+    // See webview-preload.js's Notification wrapper. Same per-view
+    // webContents.ipc scoping as watchAppBadge, so no appId lookup needed.
+    view.webContents.ipc.on('app:notification-clicked', () => this.focusFromNotification(app.id));
 
     view.webContents.on('did-navigate', (event, url) => {
       if (this.focusedView === view) this.emitNavStateForFocused();
@@ -1317,6 +1320,16 @@ class ViewManager {
     this.activeTabByApp.set(appId, null);
     const app = configStore.getApp(appId);
     if (app) this.show(appId, app);
+  }
+
+  // A notification click from an app's primary view: bring the window
+  // forward (it may be minimized or behind other windows) and switch to
+  // that app's primary view, where the notification came from.
+  focusFromNotification(appId) {
+    if (this.win.isMinimized()) this.win.restore();
+    this.win.show();
+    this.win.focus();
+    this.showAppPrimary(appId);
   }
 
   // A link that isn't the same site as (and doesn't look like an auth hop

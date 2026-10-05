@@ -16,6 +16,16 @@ const { GET_THEME, THEME_CHANGED } = require('../renderer/shared/ipc-channels');
 // button (a user action, not page-load) is unaffected.
 app.commandLine.appendSwitch('disable-features', 'WebAuthenticationConditionalMediation');
 
+// Windows routes a desktop app's toast notifications by its AppUserModelID,
+// which has to match the one electron-builder's installer stamps on the
+// Start Menu shortcut (its appId) — without this, pages' web Notifications
+// (Slack messages, ...) silently never show. Packaged-only: an unpackaged
+// `npm start` run has no shortcut carrying this ID, so it's left on
+// Electron's own default there.
+if (process.platform === 'win32' && app.isPackaged) {
+  app.setAppUserModelId('com.nlucaccioni.ballast');
+}
+
 // Without this, every launch (a second double-click of the installed app,
 // running `npm start` while a packaged build is already open, ...) spawns
 // a brand new process pointed at the same userData directory instead of

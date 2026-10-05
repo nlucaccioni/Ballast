@@ -13,6 +13,26 @@ const isDev = process.argv.includes('--ballast-dev');
 // electron/node builtins for local file requires.
 contextBridge.exposeInMainWorld('electronAPI', {
   reportUnread: (count) => ipcRenderer.send('app:report-unread', count),
+  notificationClicked: () => ipcRenderer.send('app:notification-clicked'),
+});
+
+// Clicking a page's notification only runs the page's own click handler,
+// which at most calls window.focus() — that can't switch Ballast's sidebar
+// to this app, so clicking a Slack message toast while another app is
+// active would otherwise land you on the wrong app. Subclassing (rather
+// than replacing) Notification keeps its static permission/
+// requestPermission working unchanged; this only adds one extra listener.
+contextBridge.executeInMainWorld({
+  func: () => {
+    if (!window.Notification) return;
+    const OriginalNotification = window.Notification;
+    window.Notification = class Notification extends OriginalNotification {
+      constructor(title, options) {
+        super(title, options);
+        this.addEventListener('click', () => window.electronAPI.notificationClicked());
+      }
+    };
+  },
 });
 
 // One targeted exception to "don't touch navigator": Google's login page
