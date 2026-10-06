@@ -6,6 +6,7 @@ const {
   PERMISSION_MENU_LABELS,
   PERMISSION_ICONS,
   getAppPermissionState,
+  permissionStates,
   setAppPermissionState,
 } = require('./session-manager');
 const { rootDomain, looksLikeAuthFlow } = require('./url-utils');
@@ -103,6 +104,49 @@ const HIBERNATE_CHECK_INTERVAL_MS = 2 * 60 * 1000;
 // Computed once here rather than inline in getOrCreate/getOrCreateTabView
 // since `app` is shadowed by their own app-config parameter in both.
 const DEV_PRELOAD_ARGS = app.isPackaged ? [] : ['--ballast-dev'];
+
+// Friendly service names for notification titles (see webview-preload.js's
+// Notification wrapper) — every toast otherwise just says "Ballast", with
+// no hint which pinned app it came from. Matched by hostname suffix against
+// where the app actually is now (lastUrl), not its stored name, which is
+// often whatever page it was added from (a login or search page). Anything
+// not listed falls back to its bare hostname.
+const APP_LABELS = [
+  ['mail.google.com', 'Gmail'],
+  ['calendar.google.com', 'Google Calendar'],
+  ['messages.google.com', 'Google Messages'],
+  ['keep.google.com', 'Google Keep'],
+  ['slack.com', 'Slack'],
+  ['whatsapp.com', 'WhatsApp'],
+  ['telegram.org', 'Telegram'],
+  ['discord.com', 'Discord'],
+];
+
+function appLabel(appConfig) {
+  let hostname;
+  try {
+    hostname = new URL(appConfig.lastUrl || appConfig.url).hostname;
+  } catch {
+    return appConfig.name || '';
+  }
+  const match = APP_LABELS.find(([suffix]) => hostname === suffix || hostname.endsWith('.' + suffix));
+  return match ? match[1] : hostname.replace(/^www\./, '');
+}
+
+// Apps whose notifications stay on screen until dismissed instead of
+// fading after a few seconds — an event reminder is easy to miss otherwise,
+// unlike a chat message that's still waiting in the app when you're back.
+// (Windows calls this a "reminder" toast; see webview-preload.js.)
+const PERSISTENT_NOTIFICATION_APPS = new Set(['Google Calendar']);
+
+// DEV_PRELOAD_ARGS plus the app's label and notification style — same
+// additionalArguments mechanism, read back by webview-preload.js.
+function preloadArgsFor(appConfig) {
+  const label = appLabel(appConfig);
+  const args = [...DEV_PRELOAD_ARGS, `--ballast-app-label=${label}`];
+  if (PERSISTENT_NOTIFICATION_APPS.has(label)) args.push('--ballast-persistent-notifications');
+  return args;
+}
 
 // Electron's default UA appends "Electron/x.y.z", which is exactly what
 // sites like WhatsApp Web and Teams sniff for to show an "unsupported
@@ -470,6 +514,7 @@ class ViewManager {
       label: PERMISSION_MENU_LABELS[permission] || permission,
       icon: PERMISSION_ICONS[permission] || '',
       state: getAppPermissionState(app, permission),
+      states: permissionStates(permission),
     }));
   }
 
@@ -974,7 +1019,7 @@ class ViewManager {
         preload: path.join(__dirname, '..', 'preload', 'webview-preload.js'),
         contextIsolation: true,
         sandbox: true,
-        additionalArguments: DEV_PRELOAD_ARGS,
+        additionalArguments: preloadArgsFor(app),
       },
     });
     view.webContents.setUserAgent(DESKTOP_USER_AGENT);
@@ -1047,7 +1092,7 @@ class ViewManager {
         preload: path.join(__dirname, '..', 'preload', 'webview-preload.js'),
         contextIsolation: true,
         sandbox: true,
-        additionalArguments: DEV_PRELOAD_ARGS,
+        additionalArguments: preloadArgsFor(app),
       },
     });
     view.webContents.setUserAgent(DESKTOP_USER_AGENT);

@@ -6,10 +6,10 @@ const tableEl = document.getElementById('table');
 const tableBody = document.getElementById('table-body');
 const emptyEl = document.getElementById('empty');
 
-const STATES = ['ask', 'allow', 'block'];
-
-function nextState(state) {
-  return STATES[(STATES.indexOf(state) + 1) % STATES.length];
+// states comes per permission from main (see session-manager.js's
+// permissionStates) — notifications skip Ask, so cycle only through those.
+function nextState(state, states) {
+  return states[(states.indexOf(state) + 1) % states.length];
 }
 
 // Column metadata (currently just label — icons dropped from this page's
@@ -60,7 +60,7 @@ function buildToggle(appId, permission) {
 
   let current = permission.state;
   btn.addEventListener('click', () => {
-    current = nextState(current);
+    current = nextState(current, permission.states);
     btn.dataset.state = current;
     tip.textContent = stateLabel(current);
     window.permissionsPageAPI.setState(appId, permission.key, current);

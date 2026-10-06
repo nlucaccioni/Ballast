@@ -3,8 +3,6 @@ const titleEl = document.getElementById('title');
 const closeBtn = document.getElementById('close-btn');
 const rowsEl = document.getElementById('rows');
 
-const STATES = ['ask', 'allow', 'block'];
-
 function iconSvg(inner) {
   return `<svg class="perm-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
 }
@@ -20,7 +18,7 @@ function buildRow(permission) {
 
   const segmented = document.createElement('div');
   segmented.className = 'segmented';
-  STATES.forEach((state) => {
+  permission.states.forEach((state) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.dataset.state = state;

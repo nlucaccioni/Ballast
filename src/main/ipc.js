@@ -103,8 +103,9 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
       // hurry — same underlying 'notifications' grant the Site permissions
       // popover's own toggle controls (see session-manager.js), just
       // surfaced directly here instead of needing two more clicks to get
-      // to it. Toggles back to 'ask' rather than 'allow', matching what an
-      // untouched permission already looks like.
+      // to it. Unmuting clears the grant ('ask') rather than storing an
+      // explicit Allow — notifications are allowed by default anyway (see
+      // DEFAULT_ALLOW_PERMISSIONS), so that's back to the untouched state.
       {
         label: 'Mute notifications',
         type: 'checkbox',

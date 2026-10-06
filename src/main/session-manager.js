@@ -15,6 +15,16 @@ const PROMPT_PERMISSIONS = new Set(['media', 'geolocation', 'notifications', 'cl
 // something a user has no context to judge.
 const DENY_PERMISSIONS = new Set(['midi', 'midiSysex', 'hid', 'serial', 'usb', 'window-management']);
 
+// Prompted permissions that start out allowed instead of unanswered. Electron's
+// permission check is a plain yes/no with no "not asked yet" answer, so an
+// unanswered permission reads to the page as "denied" — and unlike the mic
+// (requested on use), sites read notification permission *before* ever
+// asking, see "denied", and never ask at all: Slack and co. just silently
+// never notify. Allowed by default instead, like the native desktop apps
+// themselves; still blockable per app (Site permissions, or the sidebar's
+// right-click "Mute notifications"), just never asked about.
+const DEFAULT_ALLOW_PERMISSIONS = new Set(['notifications']);
+
 const PERMISSION_LABELS = {
   media: 'use your camera and microphone',
   geolocation: 'know your location',
@@ -99,8 +109,14 @@ function getAppPermissionState(app, permission) {
   if (!origin) return 'ask';
   const key = grantKey(app.partition, origin, permission);
   const grants = loadGrants();
-  if (!(key in grants)) return 'ask';
+  if (!(key in grants)) return DEFAULT_ALLOW_PERMISSIONS.has(permission) ? 'allow' : 'ask';
   return grants[key] ? 'allow' : 'block';
+}
+
+// Which states the permission UIs offer for a permission — "Ask" is
+// meaningless for a default-allowed one (it would never actually ask).
+function permissionStates(permission) {
+  return DEFAULT_ALLOW_PERMISSIONS.has(permission) ? ['allow', 'block'] : ['ask', 'allow', 'block'];
 }
 
 function setAppPermissionState(app, permission, state) {
@@ -135,6 +151,11 @@ function configurePermissions(partitionSession, partitionName, win) {
     if (DENY_PERMISSIONS.has(permission)) {
       saveGrant(key, false);
       callback(false);
+      return;
+    }
+
+    if (DEFAULT_ALLOW_PERMISSIONS.has(permission)) {
+      callback(true);
       return;
     }
 
@@ -176,6 +197,7 @@ function configurePermissions(partitionSession, partitionName, win) {
     const key = grantKey(partitionName, origin, permission);
     const grants = loadGrants();
     if (key in grants) return grants[key];
+    if (DEFAULT_ALLOW_PERMISSIONS.has(permission)) return true;
     return !PROMPT_PERMISSIONS.has(permission) && !DENY_PERMISSIONS.has(permission);
   });
 }
@@ -214,4 +236,5 @@ module.exports = {
   PERMISSION_ICONS,
   getAppPermissionState,
   setAppPermissionState,
+  permissionStates,
 };
