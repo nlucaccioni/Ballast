@@ -849,6 +849,28 @@ class ViewManager {
   // nested) instead of being judged against the pinned app's own site.
   attachWindowOpenHandler(view, ownerAppId) {
     view.webContents.setWindowOpenHandler(({ url, disposition }) => {
+      // A blank popup the page then draws into itself through the opener
+      // relationship — Slack's huddle window ("Slack - Huddle Preview",
+      // which both joining a huddle and popping one out go through) works
+      // this way. It has no URL to load as a tab, and refusing it (the
+      // non-web-URL check below would) silently breaks joining huddles
+      // entirely, so let it open as a real window, same as a browser.
+      if (url === 'about:blank' && disposition === 'new-window') {
+        return {
+          action: 'allow',
+          overrideBrowserWindowOptions: {
+            // Slack asks for show=no — its own desktop app reveals the
+            // window itself later, which a browser (and this) never does.
+            // A browser ignores that feature anyway; Electron honors it,
+            // leaving the huddle window open but invisible.
+            show: true,
+            autoHideMenuBar: true,
+            icon: path.join(__dirname, '..', '..', 'assets', 'icons', 'Ballast_Icon.png'),
+            webPreferences: { contextIsolation: true, sandbox: true },
+          },
+        };
+      }
+
       let parsed;
       try {
         parsed = new URL(url);
@@ -900,6 +922,24 @@ class ViewManager {
         this.openTab(ownerAppId, { url });
       }
       return { action: 'deny' };
+    });
+
+    // The popup windows allowed above: links clicked inside one get the
+    // same treatment as the page that opened it (tabs under ownerAppId,
+    // not unmanaged windows), and it goes away with the main window —
+    // otherwise a huddle popout left open would keep Ballast running
+    // with no main window at all. No attachContextMenu: its menus pop up
+    // relative to this.win, which would put them in the wrong place over
+    // a separate window.
+    view.webContents.on('did-create-window', (childWindow) => {
+      this.attachWindowOpenHandler(childWindow, ownerAppId);
+      const closeChild = () => {
+        if (!childWindow.isDestroyed()) childWindow.close();
+      };
+      this.win.once('closed', closeChild);
+      childWindow.once('closed', () => {
+        if (!this.win.isDestroyed()) this.win.removeListener('closed', closeChild);
+      });
     });
   }
 
