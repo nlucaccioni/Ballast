@@ -1,4 +1,4 @@
-const { WebContentsView, shell, nativeTheme, Menu, clipboard, app } = require('electron');
+const { WebContentsView, shell, nativeTheme, Menu, clipboard, app, screen } = require('electron');
 const path = require('path');
 const {
   getSessionForApp,
@@ -104,6 +104,47 @@ const HIBERNATE_CHECK_INTERVAL_MS = 2 * 60 * 1000;
 // Computed once here rather than inline in getOrCreate/getOrCreateTabView
 // since `app` is shadowed by their own app-config parameter in both.
 const DEV_PRELOAD_ARGS = app.isPackaged ? [] : ['--ballast-dev'];
+
+// See getOrCreate's 'close' handler.
+const SELF_CLOSE_REOPEN_MIN_MS = 5000;
+
+// What attachWindowOpenHandler returns for a popup it lets open as a real
+// window (sign-in popups, Slack's huddle window) — the opener relationship
+// those depend on only survives if Electron creates the window itself.
+// Sign-in popups always get a sign-in-sized window centered over Ballast
+// (positioned afterwards, in did-create-window — see
+// attachWindowOpenHandler). Their own requested size/position can't be
+// trusted here: the page works it out from its own window metrics, which
+// inside an embedded view describe Ballast's whole window or the primary
+// monitor instead (Figma's "Continue with Google" opened Ballast-sized when
+// snapped, or centered on the primary monitor otherwise). Other popups
+// (Slack's huddle window) keep the size they ask for, falling back to the
+// same default when they don't name one.
+const POPUP_DEFAULT_WIDTH = 610;
+const POPUP_DEFAULT_HEIGHT = 700;
+
+function popupHasSize(features) {
+  return /(?:^|,)\s*(?:width|height)\s*=/i.test(features || '');
+}
+
+function popupWindow(useDefaultBounds) {
+  return {
+    action: 'allow',
+    overrideBrowserWindowOptions: {
+      ...(useDefaultBounds ? { width: POPUP_DEFAULT_WIDTH, height: POPUP_DEFAULT_HEIGHT } : {}),
+      // Slack asks for show=no — its own desktop app reveals the window
+      // itself later, which a browser (and this) never does. A browser
+      // ignores that feature anyway; Electron honors it, leaving the huddle
+      // window open but invisible. A default-bounds popup starts hidden too,
+      // but only until did-create-window has moved it into place and shows
+      // it, so it never flashes up somewhere else first.
+      show: !useDefaultBounds,
+      autoHideMenuBar: true,
+      icon: path.join(__dirname, '..', '..', 'assets', 'icons', 'Ballast_Icon.png'),
+      webPreferences: { contextIsolation: true, sandbox: true },
+    },
+  };
+}
 
 // Friendly service names for notification titles (see webview-preload.js's
 // Notification wrapper) — every toast otherwise just says "Ballast", with
@@ -848,7 +889,7 @@ class ViewManager {
   // link clicked inside a tab spawns another tab alongside it (flat, not
   // nested) instead of being judged against the pinned app's own site.
   attachWindowOpenHandler(view, ownerAppId) {
-    view.webContents.setWindowOpenHandler(({ url, disposition }) => {
+    view.webContents.setWindowOpenHandler(({ url, disposition, features }) => {
       // A blank popup the page then draws into itself through the opener
       // relationship — Slack's huddle window ("Slack - Huddle Preview",
       // which both joining a huddle and popping one out go through) works
@@ -856,19 +897,8 @@ class ViewManager {
       // non-web-URL check below would) silently breaks joining huddles
       // entirely, so let it open as a real window, same as a browser.
       if (url === 'about:blank' && disposition === 'new-window') {
-        return {
-          action: 'allow',
-          overrideBrowserWindowOptions: {
-            // Slack asks for show=no — its own desktop app reveals the
-            // window itself later, which a browser (and this) never does.
-            // A browser ignores that feature anyway; Electron honors it,
-            // leaving the huddle window open but invisible.
-            show: true,
-            autoHideMenuBar: true,
-            icon: path.join(__dirname, '..', '..', 'assets', 'icons', 'Ballast_Icon.png'),
-            webPreferences: { contextIsolation: true, sandbox: true },
-          },
-        };
+        this.centerNextPopup = !popupHasSize(features);
+        return popupWindow(this.centerNextPopup);
       }
 
       let parsed;
@@ -900,12 +930,16 @@ class ViewManager {
       }
 
       // Anything else here is an explicit popup window — window.open(url,
-      // name, 'width=...,height=...') — which is how Google's account
-      // chooser and other OAuth/SSO continuations open. Those are meant to
-      // complete the *current* page's sign-in (and rely on the opener
-      // relationship to do it), not present new content, so same-site or
-      // auth-flow-shaped targets stay in this same view; anything else
-      // still becomes a tab rather than reaching the OS browser.
+      // name, 'width=...,height=...') — which is how "Sign in with Google"
+      // and other OAuth/SSO popups open. Those complete the *opener's*
+      // sign-in: the popup hands the result back through window.opener and
+      // then closes itself. So same-site or auth-flow-shaped targets open
+      // as a real popup window, exactly like a browser. Loading them into
+      // this same view instead (what this used to do) replaced the page
+      // that was waiting for the result, and the popup's own closing then
+      // took the whole tab down with it (e.g. Figma's Google login).
+      // Anything else still becomes a tab rather than reaching the OS
+      // browser.
       let currentRoot = null;
       try {
         currentRoot = rootDomain(new URL(view.webContents.getURL()).hostname);
@@ -917,21 +951,41 @@ class ViewManager {
       const looksLikeAuth = looksLikeAuthFlow(parsed);
 
       if (isSameSite || looksLikeAuth) {
-        view.webContents.loadURL(url);
-      } else {
-        this.openTab(ownerAppId, { url });
+        this.centerNextPopup = true;
+        return popupWindow(true);
       }
+      this.openTab(ownerAppId, { url });
       return { action: 'deny' };
     });
 
-    // The popup windows allowed above: links clicked inside one get the
-    // same treatment as the page that opened it (tabs under ownerAppId,
-    // not unmanaged windows), and it goes away with the main window —
-    // otherwise a huddle popout left open would keep Ballast running
-    // with no main window at all. No attachContextMenu: its menus pop up
-    // relative to this.win, which would put them in the wrong place over
-    // a separate window.
+    // The popup windows allowed above (popupWindow): links clicked inside
+    // one get the same treatment as the page that opened it (tabs under
+    // ownerAppId, not unmanaged windows), and it goes away with the main
+    // window — otherwise a huddle popout left open would keep Ballast
+    // running with no main window at all. No attachContextMenu: its menus
+    // pop up relative to this.win, which would put them in the wrong place
+    // over a separate window.
     view.webContents.on('did-create-window', (childWindow) => {
+      // Positioned here, after creation, rather than via x/y in
+      // popupWindow's options: an initial position across monitors at
+      // negative coordinates or mixed scaling can land the window on the
+      // wrong screen entirely. Clamped to the work area of whichever
+      // display Ballast is on, so it's never partly off-screen.
+      if (this.centerNextPopup) {
+        const parent = this.win.getBounds();
+        const area = screen.getDisplayMatching(parent).workArea;
+        const { width, height } = childWindow.getBounds();
+        const x = Math.round(parent.x + (parent.width - width) / 2);
+        const y = Math.round(parent.y + (parent.height - height) / 2);
+        childWindow.setBounds({
+          x: Math.min(Math.max(x, area.x), area.x + area.width - width),
+          y: Math.min(Math.max(y, area.y), area.y + area.height - height),
+          width,
+          height,
+        });
+        childWindow.show();
+      }
+      this.centerNextPopup = false;
       this.attachWindowOpenHandler(childWindow, ownerAppId);
       const closeChild = () => {
         if (!childWindow.isDestroyed()) childWindow.close();
@@ -1104,6 +1158,30 @@ class ViewManager {
       if (isMainFrame) configStore.updateAppLastUrl(app.id, url);
     });
 
+    // Same self-close hazard as getOrCreateTabView's — but a pinned app
+    // can't just be closed, so drop the dead view and reopen the app fresh
+    // if it's on screen (otherwise leave it asleep, like hibernation, until
+    // it's next clicked). A page that closes itself the moment it loads
+    // would make that reopen loop forever, so one that lived under a few
+    // seconds is left asleep instead.
+    const createdAt = Date.now();
+    view.webContents.once('close', () => {
+      if (this.views.get(app.id) !== view) return;
+      const wasFocused = this.focusedView === view;
+      this.views.delete(app.id);
+      this.lastFocusedAt.delete(app.id);
+      if (wasFocused) {
+        this.win.contentView.removeChildView(view);
+        this.focusedView = null;
+      }
+      const current = configStore.getApp(app.id);
+      if (wasFocused && current && Date.now() - createdAt > SELF_CLOSE_REOPEN_MIN_MS) {
+        this.show(app.id, current);
+      } else {
+        this.updateMeta(app.id, { hibernated: true });
+      }
+    });
+
     this.views.set(app.id, view);
     this.touchFocusTime(app.id);
     // Reaching this line means the view didn't already exist in this.views
@@ -1159,6 +1237,18 @@ class ViewManager {
       if (this.focusedView === view) this.emitNavStateForFocused();
       // Same hash-only-navigation gap as getOrCreate's own handler above.
       if (isMainFrame) this.updateTabMeta(appId, tab.id, { url });
+    });
+
+    // A page can close itself (window.close()) — in a browser that closes
+    // its tab, but here it destroys the WebContents and leaves this view
+    // behind with webContents undefined, so the next thing to touch the
+    // focused view (opening the tab menu, nav state, ...) throws and the
+    // whole window stops responding. Close the tab the way the user closing
+    // it would. 'close' (not 'destroyed') because only a page closing
+    // itself fires it — 'destroyed' also fires for every view when Ballast
+    // quits, which would wipe every saved tab on the way out.
+    view.webContents.once('close', () => {
+      if (this.tabViews.get(tab.id) === view) this.closeTab(appId, tab.id);
     });
 
     this.tabViews.set(tab.id, view);
