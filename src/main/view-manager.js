@@ -1,5 +1,7 @@
-const { WebContentsView, shell, nativeTheme, Menu, clipboard, app, screen } = require('electron');
+const { WebContentsView, shell, nativeTheme, Menu, clipboard, app, screen, Notification, nativeImage } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 const {
   getSessionForApp,
   PROMPT_PERMISSIONS,
@@ -177,8 +179,30 @@ function appLabel(appConfig) {
 // Apps whose notifications stay on screen until dismissed instead of
 // fading after a few seconds — an event reminder is easy to miss otherwise,
 // unlike a chat message that's still waiting in the app when you're back.
-// (Windows calls this a "reminder" toast; see webview-preload.js.)
+// Shown by main itself, with a Dismiss button — see
+// showPersistentNotification.
 const PERSISTENT_NOTIFICATION_APPS = new Set(['Google Calendar']);
+
+function escapeXml(text) {
+  return String(text).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' })[c]);
+}
+
+// Windows toast for showPersistentNotification: "reminder" keeps it on
+// screen until dealt with, and the one Dismiss button carries Electron's
+// own action arguments so it reports as an 'action' for notification `id`.
+function reminderToastXml({ id, title, body, iconPath }) {
+  const image = iconPath ? `<image placement="appLogoOverride" hint-crop="none" src="${escapeXml(iconPath)}"/>` : '';
+  return `<toast scenario="reminder">
+  <visual><binding template="ToastGeneric">
+    <text>${escapeXml(title)}</text>
+    <text>${escapeXml(body)}</text>
+    ${image}
+  </binding></visual>
+  <actions>
+    <action activationType="foreground" arguments="${escapeXml(`type=action&action=0&tag=${id}`)}" content="Dismiss"/>
+  </actions>
+</toast>`;
+}
 
 // DEV_PRELOAD_ARGS plus the app's label and notification style — same
 // additionalArguments mechanism, read back by webview-preload.js.
@@ -208,6 +232,7 @@ class ViewManager {
     this.activeTabByApp = new Map(); // appId -> tabId | null (null = that app's own primary view)
     this.focusedView = null; // whichever view (primary or tab) is currently attached/visible
     this.meta = new Map(); // appId -> { title, faviconUrl }
+    this.persistentNotifications = new Map(); // see showPersistentNotification
     this.unread = new Map(); // appId -> count
     this.activeId = null; // which pinned app is selected in the sidebar
     this.theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'; // kept current by setTheme(), read by any overlay that (re)loads later
@@ -1137,9 +1162,7 @@ class ViewManager {
       watchTitleCount(view, (count) => this.updateUnread(app.id, count));
     }
     watchAppBadge(view, (count) => this.updateUnread(app.id, count));
-    // See webview-preload.js's Notification wrapper. Same per-view
-    // webContents.ipc scoping as watchAppBadge, so no appId lookup needed.
-    view.webContents.ipc.on('app:notification-clicked', () => this.focusFromNotification(app.id));
+    this.attachNotificationIpc(view, app.id);
 
     view.webContents.on('did-navigate', (event, url) => {
       if (this.focusedView === view) this.emitNavStateForFocused();
@@ -1218,6 +1241,7 @@ class ViewManager {
 
     this.attachWindowOpenHandler(view, appId);
     this.attachContextMenu(view, appId);
+    this.attachNotificationIpc(view, appId);
 
     view.webContents.on('page-favicon-updated', (event, favicons) => {
       this.updateTabMeta(appId, tab.id, { faviconUrl: favicons[0] || null });
@@ -1495,6 +1519,103 @@ class ViewManager {
     this.activeTabByApp.set(appId, null);
     const app = configStore.getApp(appId);
     if (app) this.show(appId, app);
+  }
+
+  // See webview-preload.js's Notification wrapper. Per-view
+  // webContents.ipc scoping (same as watchAppBadge), so each message
+  // already knows which app it came from without any sender lookup.
+  attachNotificationIpc(view, appId) {
+    view.webContents.ipc.on('app:notification-clicked', () => this.focusFromNotification(appId));
+    view.webContents.ipc.on('app:show-persistent-notification', (event, details) => {
+      this.showPersistentNotification(appId, view, details);
+    });
+  }
+
+  // A stay-on-screen notification for apps like Google Calendar (see
+  // PERSISTENT_NOTIFICATION_APPS), shown from here rather than by the page,
+  // so that dismissing one doesn't also jump to the app. Electron reports
+  // every way of closing a stay-on-screen notification it builds itself —
+  // Windows' own Close button included, which it always adds — as a plain
+  // 'click', same as clicking the body. On Windows the toast's XML is
+  // written here instead, with a single Dismiss button in Electron's own
+  // action-argument format (type=action&action=0&tag=<this notification's
+  // id>): that reports as 'action', the body still reports as 'click', and
+  // Windows adds no Close button of its own to a toast that already has one.
+  // Held in this.persistentNotifications until closed, both so events keep
+  // arriving (an unreferenced Notification can be garbage-collected) and so
+  // a newer one with the same tag replaces it, like a browser would.
+  async showPersistentNotification(appId, view, { title, body, icon, tag }) {
+    const image = await this.notificationIcon(view, icon);
+    const notificationId = `ballast-${crypto.randomUUID()}`;
+    const notification =
+      process.platform === 'win32'
+        ? new Notification({
+            id: notificationId,
+            toastXml: reminderToastXml({
+              id: notificationId,
+              title: String(title || ''),
+              body: String(body || ''),
+              iconPath: image ? this.notificationIconFile(icon, image) : null,
+            }),
+          })
+        : new Notification({
+            title: String(title || ''),
+            body: String(body || ''),
+            icon: image,
+            timeoutType: 'never',
+            actions: [{ type: 'button', text: 'Dismiss' }],
+          });
+    const key = tag ? `${appId}|${tag}` : Symbol('notification');
+    const previous = this.persistentNotifications.get(key);
+    this.persistentNotifications.set(key, notification);
+    const forget = () => {
+      if (this.persistentNotifications.get(key) === notification) this.persistentNotifications.delete(key);
+    };
+    notification.on('click', () => {
+      forget();
+      this.focusFromNotification(appId);
+    });
+    notification.on('action', () => {
+      forget();
+      notification.close();
+    });
+    notification.on('close', forget);
+    if (previous) previous.close();
+    notification.show();
+  }
+
+  // The page's icon URL as an image main's Notification can use (it takes
+  // a NativeImage or file path, not a URL) — fetched through the app's own
+  // session. Best-effort: no icon is fine, but a slow or broken one
+  // shouldn't hold the notification up.
+  async notificationIcon(view, iconUrl) {
+    if (!/^https?:[/][/]/.test(iconUrl || '') || view.webContents.isDestroyed()) return undefined;
+    try {
+      const response = await Promise.race([
+        view.webContents.session.fetch(iconUrl),
+        new Promise((resolve) => setTimeout(() => resolve(null), 3000)),
+      ]);
+      if (!response || !response.ok) return undefined;
+      const image = nativeImage.createFromBuffer(Buffer.from(await response.arrayBuffer()));
+      return image.isEmpty() ? undefined : image;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Toast XML can only reference an image by file path, so the icon is
+  // written to Ballast's temp folder — one file per icon URL, reused across
+  // notifications (Calendar sends the same logo every time).
+  notificationIconFile(iconUrl, image) {
+    try {
+      const dir = path.join(app.getPath('temp'), 'ballast-notification-icons');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${crypto.createHash('sha1').update(iconUrl).digest('hex')}.png`);
+      if (!fs.existsSync(file)) fs.writeFileSync(file, image.toPNG());
+      return file;
+    } catch {
+      return null;
+    }
   }
 
   // A notification click from an app's primary view: bring the window

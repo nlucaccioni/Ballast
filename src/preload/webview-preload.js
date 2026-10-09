@@ -22,15 +22,20 @@ const persistentNotifications = process.argv.includes('--ballast-persistent-noti
 contextBridge.exposeInMainWorld('electronAPI', {
   reportUnread: (count) => ipcRenderer.send('app:report-unread', count),
   notificationClicked: () => ipcRenderer.send('app:notification-clicked'),
+  showPersistentNotification: (details) => ipcRenderer.send('app:show-persistent-notification', details),
 });
 
 // Every toast is otherwise headed just "Ballast", so the title gets the
 // app's name prefixed ("Slack · New message from ...") to say where it
 // came from — skipped if the page's own title already starts with it.
 //
-// For persistent-notification apps, requireInteraction is forced on:
-// Electron turns that into a Windows "reminder" toast, which stays on
-// screen with a Close button until dismissed rather than fading out.
+// For persistent-notification apps (Google Calendar), main shows the
+// notification instead (see view-manager.js's showPersistentNotification)
+// and the page just gets a stand-in object back. A page-made notification
+// can stay on screen (requireInteraction), but Electron reports its Close
+// button as a plain click, indistinguishable from clicking the body — so
+// dismissing a reminder would still jump to the app. Main's own
+// notification has a separate Dismiss button that reports separately.
 //
 // Clicking a page's notification only runs the page's own click handler,
 // which at most calls window.focus() — that can't switch Ballast's sidebar
@@ -45,10 +50,30 @@ contextBridge.executeInMainWorld({
     window.Notification = class Notification extends OriginalNotification {
       constructor(title, options) {
         const text = String(title ?? '');
-        super(
-          label && !text.startsWith(label) ? `${label} · ${text}` : text,
-          persistent ? { ...options, requireInteraction: true } : options
-        );
+        const labeled = label && !text.startsWith(label) ? `${label} · ${text}` : text;
+        if (persistent) {
+          window.electronAPI.showPersistentNotification({
+            title: labeled,
+            body: String(options?.body ?? ''),
+            icon: typeof options?.icon === 'string' ? options.icon : '',
+            tag: String(options?.tag ?? ''),
+          });
+          // Returning an object from a derived constructor (without calling
+          // super) hands the page this instead of a real notification.
+          const standIn = new EventTarget();
+          return Object.assign(standIn, {
+            title: labeled,
+            body: String(options?.body ?? ''),
+            tag: String(options?.tag ?? ''),
+            data: options?.data ?? null,
+            onclick: null,
+            onclose: null,
+            onshow: null,
+            onerror: null,
+            close() {},
+          });
+        }
+        super(labeled, options);
         this.addEventListener('click', () => window.electronAPI.notificationClicked());
       }
     };
