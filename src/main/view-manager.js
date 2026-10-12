@@ -1,4 +1,4 @@
-const { WebContentsView, shell, nativeTheme, Menu, clipboard, app, screen, Notification, nativeImage } = require('electron');
+const { WebContentsView, webContents, shell, nativeTheme, Menu, clipboard, app, screen, Notification, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -223,6 +223,18 @@ function preloadArgsFor(appConfig) {
 const DESKTOP_USER_AGENT =
   `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ` +
   `Chrome/${process.versions.chrome} Safari/537.36`;
+
+// What a view falls back to after hitting a Cloudflare challenge (see
+// attachCloudflareFallback): Cloudflare can tell this isn't real Chrome no
+// matter how consistently it's dressed up (even with matching "Google
+// Chrome" client-hint brands), so DESKTOP_USER_AGENT never passes its
+// "Just a moment..." check — but an honest Electron UA passes it on its
+// own in a few seconds. Electron's default minus the app's own name token.
+const HONEST_USER_AGENT =
+  `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ` +
+  `Chrome/${process.versions.chrome} Electron/${process.versions.electron} Safari/537.36`;
+
+const cloudflareFallbackSessions = new WeakSet();
 
 class ViewManager {
   constructor(win) {
@@ -1129,6 +1141,34 @@ class ViewManager {
     });
   }
 
+  // Cloudflare's "Just a moment..." challenge never passes while a view
+  // presents as Chrome (see HONEST_USER_AGENT) — the checkbox just spins or
+  // re-appears forever. Cloudflare marks the challenge response itself
+  // (cf-mitigated: challenge), so when a page load gets one, that view
+  // switches to the honest UA and reloads once, which then passes without
+  // any interaction. Only views that actually hit a challenge change, and
+  // only once (a view already on the honest UA is left alone, so this can't
+  // loop); everything else keeps the Chrome UA that sites like WhatsApp
+  // need. One listener per session, limited to top-level page loads.
+  attachCloudflareFallback(ses) {
+    if (cloudflareFallbackSessions.has(ses)) return;
+    cloudflareFallbackSessions.add(ses);
+    ses.webRequest.onHeadersReceived({ urls: ['<all_urls>'], types: ['mainFrame'] }, (details, callback) => {
+      callback({});
+      const header = Object.entries(details.responseHeaders || {}).find(([name]) => name.toLowerCase() === 'cf-mitigated');
+      if (!header || !header[1].some((value) => value.includes('challenge'))) return;
+      const contents = webContents.fromId(details.webContentsId);
+      if (!contents || contents.isDestroyed() || contents.getUserAgent() !== DESKTOP_USER_AGENT) return;
+      // Deferred: reloading from inside the response callback for the very
+      // load being replaced isn't safe.
+      setImmediate(() => {
+        if (contents.isDestroyed()) return;
+        contents.setUserAgent(HONEST_USER_AGENT);
+        contents.reload();
+      });
+    });
+  }
+
   getOrCreate(app) {
     if (this.views.has(app.id)) return this.views.get(app.id);
 
@@ -1142,6 +1182,7 @@ class ViewManager {
       },
     });
     view.webContents.setUserAgent(DESKTOP_USER_AGENT);
+    this.attachCloudflareFallback(view.webContents.session);
     view.webContents.setAudioMuted(!!app.audioMuted);
     // Reopens wherever this app was last left (e.g. which Google account
     // slot a Gmail app was on), falling back to the pinned URL the first
@@ -1237,6 +1278,7 @@ class ViewManager {
       },
     });
     view.webContents.setUserAgent(DESKTOP_USER_AGENT);
+    this.attachCloudflareFallback(view.webContents.session);
     view.webContents.loadURL(tab.url);
 
     this.attachWindowOpenHandler(view, appId);
