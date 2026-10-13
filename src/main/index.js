@@ -89,6 +89,19 @@ const appMenu = Menu.buildFromTemplate([
       { label: 'System', type: 'radio', checked: configStore.getThemePreference() === 'system', click: () => setThemePreference('system') },
     ],
   },
+  // The OS's own login-item registration (Windows: a Run registry entry
+  // for this exe; macOS: a Login Item) is the source of truth, so there's
+  // nothing to persist ourselves — and it reflects the user turning it off
+  // from Task Manager's Startup tab too. Disabled for an unpackaged
+  // `npm start` run, which would register the bare electron.exe instead
+  // of Ballast.
+  {
+    label: 'Open at startup',
+    type: 'checkbox',
+    checked: app.isPackaged && app.getLoginItemSettings().openAtLogin,
+    enabled: app.isPackaged,
+    click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
+  },
   { type: 'separator' },
   // viewManager isn't assigned yet at this point (this template is built at
   // module load, before createWindow() runs) — reads it as a closure over
