@@ -14,6 +14,7 @@ const {
 const { rootDomain, looksLikeAuthFlow } = require('./url-utils');
 const { watchTitleCount, watchAppBadge } = require('./unread-tracker');
 const configStore = require('./config-store');
+const { LazyOverlay } = require('./lazy-overlay');
 const {
   APP_META_CHANGED,
   NAV_STATE_CHANGED,
@@ -309,103 +310,75 @@ class ViewManager {
     this.tooltipOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.tooltipOverlay));
     this.win.contentView.addChildView(this.tooltipOverlay);
 
-    // Same technique again for the per-tab menu (URL field + duplicate/
-    // promote/open-externally actions) — needs to float above whatever tab
-    // is currently showing rather than replacing it. Starts at zero size
-    // (invisible) until openTabMenu() positions and sizes it.
-    this.tabMenuOverlay = new WebContentsView({
-      webPreferences: {
-        preload: path.join(__dirname, '..', 'preload', 'tab-menu-preload.js'),
-        contextIsolation: true,
-        sandbox: true,
-      },
-    });
-    this.tabMenuOverlay.setBackgroundColor('#00000000');
-    this.tabMenuOverlay.webContents.loadFile(
-      path.join(__dirname, '..', 'renderer', 'tab-menu', 'index.html')
-    );
-    this.tabMenuOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.tabMenuOverlay));
-    this.win.contentView.addChildView(this.tabMenuOverlay);
+    // The rest of the overlays — the per-tab menu (URL field + duplicate/
+    // promote/open-externally actions), a group's color/label popover, an
+    // app's site-permissions popover, and the two full-window settings
+    // pages — use the same float-above-the-app-view technique, but are
+    // opened rarely, so each is only loaded while in use (see LazyOverlay).
+    // The getters below keep `this.tabMenuOverlay` etc. working for the
+    // open paths, which create on demand; close/theme/z-order paths use
+    // `.existing` instead so they never create one just to close it.
+    this.lazyOverlays = {
+      tabMenu: new LazyOverlay(this.win, {
+        name: 'tab-menu',
+        onCreate: (view) => {
+          this.sendThemeTo(view);
+          // positionTabMenu gives this real OS focus on open (see its own
+          // comment for why) — 'blur' is what then tells us the user
+          // clicked away, wherever that click actually landed: a pinned
+          // app's own WebContentsView (a separate native view the
+          // sidebar's own click handlers have no visibility into at all),
+          // the sidebar itself, even switching to a different OS window
+          // entirely all blur this the same way. A much more general signal
+          // than trying to listen for clicks everywhere they could happen.
+          view.webContents.on('blur', () => this.closeTabMenu());
+          // A freshly created menu is still loading when positionTabMenu
+          // focuses it, which doesn't stick — focus again once it can take it.
+          view.webContents.once('did-finish-load', () => {
+            if (this.tabMenuContext) view.webContents.focus();
+          });
+        },
+      }),
+      groupMenu: new LazyOverlay(this.win, { name: 'group-menu', onCreate: (view) => this.sendThemeTo(view) }),
+      permissionMenu: new LazyOverlay(this.win, { name: 'permission-menu', onCreate: (view) => this.sendThemeTo(view) }),
+      // Unlike the popovers, these two are full-window modal layers (see
+      // openPermissionsPage/openHibernationPage) — their own HTML does the
+      // centering/backdrop, so they only ever need the whole content area.
+      permissionsPage: new LazyOverlay(this.win, { name: 'permissions-page', onCreate: (view) => this.sendThemeTo(view) }),
+      hibernationPage: new LazyOverlay(this.win, { name: 'hibernation-page', onCreate: (view) => this.sendThemeTo(view) }),
+    };
     this.tabMenuContext = null; // { appId, tabId } while open, else null
-    // positionTabMenu gives this real OS focus on open (see its own
-    // comment for why) — 'blur' is what then tells us the user clicked
-    // away, wherever that click actually landed: a pinned app's own
-    // WebContentsView (a separate native view the sidebar's own click
-    // handlers have no visibility into at all), the sidebar itself, even
-    // switching to a different OS window entirely all blur this the same
-    // way. A much more general signal than trying to listen for clicks
-    // everywhere they could happen.
-    this.tabMenuOverlay.webContents.on('blur', () => this.closeTabMenu());
-
-    // Same technique again for a group's color/label popover — see
-    // openGroupMenu.
-    this.groupMenuOverlay = new WebContentsView({
-      webPreferences: {
-        preload: path.join(__dirname, '..', 'preload', 'group-menu-preload.js'),
-        contextIsolation: true,
-        sandbox: true,
-      },
-    });
-    this.groupMenuOverlay.setBackgroundColor('#00000000');
-    this.groupMenuOverlay.webContents.loadFile(
-      path.join(__dirname, '..', 'renderer', 'group-menu', 'index.html')
-    );
-    this.groupMenuOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.groupMenuOverlay));
-    this.win.contentView.addChildView(this.groupMenuOverlay);
     this.groupMenuContext = null; // groupId while open, else null
-
-    // Same technique again for a single app's site-permissions popover —
-    // see openPermissionMenu.
-    this.permissionMenuOverlay = new WebContentsView({
-      webPreferences: {
-        preload: path.join(__dirname, '..', 'preload', 'permission-menu-preload.js'),
-        contextIsolation: true,
-        sandbox: true,
-      },
-    });
-    this.permissionMenuOverlay.setBackgroundColor('#00000000');
-    this.permissionMenuOverlay.webContents.loadFile(
-      path.join(__dirname, '..', 'renderer', 'permission-menu', 'index.html')
-    );
-    this.permissionMenuOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.permissionMenuOverlay));
-    this.win.contentView.addChildView(this.permissionMenuOverlay);
     this.permissionMenuContext = null; // appId while open, else null
-
-    // Unlike the popovers above, this one is a full-window modal layer
-    // (see openPermissionsPage) rather than a small box positioned near a
-    // click — its own HTML does the centering/backdrop, so this only ever
-    // needs bounds matching the whole content area.
-    this.permissionsPageOverlay = new WebContentsView({
-      webPreferences: {
-        preload: path.join(__dirname, '..', 'preload', 'permissions-page-preload.js'),
-        contextIsolation: true,
-        sandbox: true,
-      },
-    });
-    this.permissionsPageOverlay.setBackgroundColor('#00000000');
-    this.permissionsPageOverlay.webContents.loadFile(
-      path.join(__dirname, '..', 'renderer', 'permissions-page', 'index.html')
-    );
-    this.permissionsPageOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.permissionsPageOverlay));
-    this.win.contentView.addChildView(this.permissionsPageOverlay);
     this.permissionsPageOpen = false;
-
-    // Same full-window-modal-layer shape as permissionsPageOverlay above —
-    // see openHibernationPage.
-    this.hibernationPageOverlay = new WebContentsView({
-      webPreferences: {
-        preload: path.join(__dirname, '..', 'preload', 'hibernation-page-preload.js'),
-        contextIsolation: true,
-        sandbox: true,
-      },
-    });
-    this.hibernationPageOverlay.setBackgroundColor('#00000000');
-    this.hibernationPageOverlay.webContents.loadFile(
-      path.join(__dirname, '..', 'renderer', 'hibernation-page', 'index.html')
-    );
-    this.hibernationPageOverlay.webContents.once('did-finish-load', () => this.sendThemeTo(this.hibernationPageOverlay));
-    this.win.contentView.addChildView(this.hibernationPageOverlay);
     this.hibernationPageOpen = false;
+  }
+
+  get tabMenuOverlay() {
+    return this.lazyOverlays.tabMenu.view;
+  }
+
+  get groupMenuOverlay() {
+    return this.lazyOverlays.groupMenu.view;
+  }
+
+  get permissionMenuOverlay() {
+    return this.lazyOverlays.permissionMenu.view;
+  }
+
+  get permissionsPageOverlay() {
+    return this.lazyOverlays.permissionsPage.view;
+  }
+
+  get hibernationPageOverlay() {
+    return this.lazyOverlays.hibernationPage.view;
+  }
+
+  // Only the lazy overlays currently loaded — see LazyOverlay.
+  loadedLazyOverlays() {
+    return Object.values(this.lazyOverlays)
+      .map((overlay) => overlay.existing)
+      .filter(Boolean);
   }
 
   sendThemeTo(view) {
@@ -421,11 +394,7 @@ class ViewManager {
     this.theme = theme;
     this.sendThemeTo(this.cornerMask);
     this.sendThemeTo(this.tooltipOverlay);
-    this.sendThemeTo(this.tabMenuOverlay);
-    this.sendThemeTo(this.groupMenuOverlay);
-    this.sendThemeTo(this.permissionMenuOverlay);
-    this.sendThemeTo(this.permissionsPageOverlay);
-    this.sendThemeTo(this.hibernationPageOverlay);
+    this.loadedLazyOverlays().forEach((view) => this.sendThemeTo(view));
   }
 
   // Re-adding an existing child view moves it to the top of the z-order, so
@@ -434,11 +403,7 @@ class ViewManager {
   raiseOverlays() {
     this.win.contentView.addChildView(this.cornerMask);
     this.win.contentView.addChildView(this.tooltipOverlay);
-    this.win.contentView.addChildView(this.tabMenuOverlay);
-    this.win.contentView.addChildView(this.groupMenuOverlay);
-    this.win.contentView.addChildView(this.permissionMenuOverlay);
-    this.win.contentView.addChildView(this.permissionsPageOverlay);
-    this.win.contentView.addChildView(this.hibernationPageOverlay);
+    this.loadedLazyOverlays().forEach((view) => this.win.contentView.addChildView(view));
   }
 
   showTooltip(title, label, x, y) {
@@ -523,8 +488,10 @@ class ViewManager {
 
   closeTabMenu() {
     this.tabMenuContext = null;
-    this.tabMenuOverlay.webContents.send('tab-menu:close');
     this.win.webContents.send(TAB_MENU_CLOSED);
+    const overlay = this.lazyOverlays.tabMenu.existing;
+    if (!overlay) return;
+    overlay.webContents.send('tab-menu:close');
     // Parked off-screen at a real size rather than collapsed to 0x0 — a
     // zero-size WebContentsView appears to stop compositing updates
     // entirely while hidden, which silently swallowed the animation-reset
@@ -533,7 +500,8 @@ class ViewManager {
     // still the old fully-visible one. Keeping a real, constant viewport
     // size — just off the visible window — keeps it rendering normally
     // the whole time it's "closed".
-    this.tabMenuOverlay.setBounds({ x: -10000, y: -10000, width: TAB_MENU_WIDTH, height: tabMenuHeight(4) });
+    overlay.setBounds({ x: -10000, y: -10000, width: TAB_MENU_WIDTH, height: tabMenuHeight(4) });
+    this.lazyOverlays.tabMenu.scheduleTeardown();
   }
 
   // Opened by right-clicking either a group's own empty container space or,
@@ -565,10 +533,13 @@ class ViewManager {
 
   closeGroupMenu() {
     this.groupMenuContext = null;
-    this.groupMenuOverlay.webContents.send('group-menu:close');
+    const overlay = this.lazyOverlays.groupMenu.existing;
+    if (!overlay) return;
+    overlay.webContents.send('group-menu:close');
     // Parked off-screen at a real size rather than collapsed to 0x0 — see
     // closeTabMenu's identical comment for why.
-    this.groupMenuOverlay.setBounds({ x: -10000, y: -10000, width: GROUP_MENU_WIDTH, height: GROUP_MENU_HEIGHT });
+    overlay.setBounds({ x: -10000, y: -10000, width: GROUP_MENU_WIDTH, height: GROUP_MENU_HEIGHT });
+    this.lazyOverlays.groupMenu.scheduleTeardown();
   }
 
   groupMenuSetColor(color) {
@@ -625,8 +596,11 @@ class ViewManager {
 
   closePermissionMenu() {
     this.permissionMenuContext = null;
-    this.permissionMenuOverlay.webContents.send('permission-menu:close');
-    this.permissionMenuOverlay.setBounds({ x: -10000, y: -10000, width: PERMISSION_MENU_WIDTH, height: PERMISSION_MENU_HEIGHT });
+    const overlay = this.lazyOverlays.permissionMenu.existing;
+    if (!overlay) return;
+    overlay.webContents.send('permission-menu:close');
+    overlay.setBounds({ x: -10000, y: -10000, width: PERMISSION_MENU_WIDTH, height: PERMISSION_MENU_HEIGHT });
+    this.lazyOverlays.permissionMenu.scheduleTeardown();
   }
 
   permissionMenuSetState(permission, state) {
@@ -706,8 +680,11 @@ class ViewManager {
 
   closePermissionsPage() {
     this.permissionsPageOpen = false;
-    this.permissionsPageOverlay.webContents.send('permissions-page:close');
-    this.permissionsPageOverlay.setBounds({ x: -10000, y: -10000, width: 800, height: 600 });
+    const overlay = this.lazyOverlays.permissionsPage.existing;
+    if (!overlay) return;
+    overlay.webContents.send('permissions-page:close');
+    overlay.setBounds({ x: -10000, y: -10000, width: 800, height: 600 });
+    this.lazyOverlays.permissionsPage.scheduleTeardown();
   }
 
   permissionsPageSetState(appId, permission, state) {
@@ -772,8 +749,11 @@ class ViewManager {
 
   closeHibernationPage() {
     this.hibernationPageOpen = false;
-    this.hibernationPageOverlay.webContents.send('hibernation-page:close');
-    this.hibernationPageOverlay.setBounds({ x: -10000, y: -10000, width: 800, height: 600 });
+    const overlay = this.lazyOverlays.hibernationPage.existing;
+    if (!overlay) return;
+    overlay.webContents.send('hibernation-page:close');
+    overlay.setBounds({ x: -10000, y: -10000, width: 800, height: 600 });
+    this.lazyOverlays.hibernationPage.scheduleTeardown();
   }
 
   hibernationPageSetMode(mode) {
