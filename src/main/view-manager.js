@@ -829,10 +829,12 @@ class ViewManager {
     if (!primaryView) return;
     const oldPrimaryUrl = primaryView.webContents.getURL() || configStore.getApp(appId)?.url;
     const oldMeta = this.meta.get(appId) || {};
-    const wasFocusedOnTab = this.focusedView === this.tabViews.get(tabId);
+    const tabView = this.tabViews.get(tabId);
+    const wasFocusedOnTab = tabView && this.focusedView === tabView;
 
     configStore.removeTab(appId, tabId);
     this.tabViews.delete(tabId);
+    this.releaseView(tabView);
     if (wasFocusedOnTab) this.focusedView = null;
 
     if (oldPrimaryUrl) {
@@ -1447,12 +1449,11 @@ class ViewManager {
   }
 
   // Dormant views are never attached to win.contentView in the first place
-  // — only setFocusedView ever adds one (see its own comment) — so there's
-  // nothing to detach here. Same "drop the reference and let Electron tear
-  // down the WebContents" idiom destroy() already uses below, just without
-  // that method's other cleanup (meta/unread/activeTabByApp all need to
-  // survive, so getOrCreate can restore the sidebar icon instantly and
-  // rehydrate the exact same app on next click rather than a blank slate).
+  // — only setFocusedView ever adds one (see its own comment). Shut down
+  // via releaseView like destroy() below, just without that method's other
+  // cleanup (meta/unread/activeTabByApp all need to survive, so getOrCreate
+  // can restore the sidebar icon instantly and rehydrate the exact same app
+  // on next click rather than a blank slate).
   hibernateApp(appId) {
     const view = this.views.get(appId);
     // checkIdleViews already skips the focused view before ever calling
@@ -1463,6 +1464,7 @@ class ViewManager {
     if (!view || view === this.focusedView) return;
     this.views.delete(appId);
     this.lastFocusedAt.delete(appId);
+    this.releaseView(view);
     this.updateMeta(appId, { hibernated: true });
   }
 
@@ -1477,9 +1479,25 @@ class ViewManager {
   }
 
   hibernateTab(tabId) {
-    if (!this.tabViews.has(tabId)) return;
+    const view = this.tabViews.get(tabId);
+    if (!view || view === this.focusedView) return;
     this.tabViews.delete(tabId);
     this.lastFocusedAt.delete(tabId);
+    this.releaseView(view);
+  }
+
+  // Electron never tears down a WebContentsView's page by itself — dropping
+  // the last reference to the view leaves its renderer process running
+  // (and, if it was still attached, still in the window), just unreachable.
+  // So everything that discards a view (hibernation, closing a tab,
+  // removing an app, ...) shuts it down explicitly here. Callers remove it
+  // from this.views/this.tabViews first: the self-close 'close' handlers in
+  // getOrCreate/getOrCreateTabView check that, so a close from here isn't
+  // mistaken for the page closing itself.
+  releaseView(view) {
+    if (!view) return;
+    if (!this.win.isDestroyed()) this.win.contentView.removeChildView(view);
+    if (!view.webContents.isDestroyed()) view.webContents.close();
   }
 
   // Attaches `view` as the one visible content view, detaching whatever was
@@ -1671,6 +1689,7 @@ class ViewManager {
     }
 
     if (view) this.tabViews.delete(tabId);
+    this.releaseView(view);
     this.lastFocusedAt.delete(tabId);
     configStore.removeTab(appId, tabId);
     this.emitActiveChanged();
@@ -1709,18 +1728,16 @@ class ViewManager {
     this.raiseOverlays();
   }
 
-  // WebContentsView has no explicit destroy() — dropping the last reference
-  // (after detaching it here) is what lets Electron tear down its WebContents.
+  // Removing an app entirely — its own view and every tab view it has are
+  // shut down (releaseView), not just forgotten.
   destroy(appId) {
     if (this.tabMenuContext?.appId === appId) this.closeTabMenu();
 
     const view = this.views.get(appId);
     if (view) {
-      if (this.focusedView === view) {
-        this.win.contentView.removeChildView(view);
-        this.focusedView = null;
-      }
+      if (this.focusedView === view) this.focusedView = null;
       this.views.delete(appId);
+      this.releaseView(view);
     }
     this.lastFocusedAt.delete(appId);
 
@@ -1728,11 +1745,9 @@ class ViewManager {
       const tabView = this.tabViews.get(tab.id);
       this.lastFocusedAt.delete(tab.id);
       if (!tabView) continue;
-      if (this.focusedView === tabView) {
-        this.win.contentView.removeChildView(tabView);
-        this.focusedView = null;
-      }
+      if (this.focusedView === tabView) this.focusedView = null;
       this.tabViews.delete(tab.id);
+      this.releaseView(tabView);
     }
     this.activeTabByApp.delete(appId);
 
