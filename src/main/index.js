@@ -184,7 +184,7 @@ function createWindow() {
 // createWindow() already reads currentTheme() fresh for its own initial
 // state, so skipping propagation here in that case loses nothing.
 nativeTheme.on('updated', () => {
-  if (!mainWindow || !viewManager) return;
+  if (!mainWindow || mainWindow.isDestroyed() || !viewManager) return;
   const theme = currentTheme();
   // win.setTitleBarOverlay() (the runtime setter, as opposed to the
   // constructor option used above) is documented Windows/Linux only —

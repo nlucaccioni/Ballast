@@ -381,6 +381,16 @@ class ViewManager {
       .filter(Boolean);
   }
 
+  // Every update the sidebar gets goes through here. Pages keep reporting
+  // things (an unread count cleared on unload, a title change) while
+  // Ballast is closing, after the window — and the sidebar's webContents
+  // with it — is already gone; sending then throws "Object has been
+  // destroyed" as an uncaught error dialog on the way out.
+  sendToSidebar(channel, ...args) {
+    if (this.win.isDestroyed() || this.win.webContents.isDestroyed()) return;
+    this.win.webContents.send(channel, ...args);
+  }
+
   sendThemeTo(view) {
     view.webContents.send('app:theme-changed', { theme: this.theme });
   }
@@ -488,7 +498,7 @@ class ViewManager {
 
   closeTabMenu() {
     this.tabMenuContext = null;
-    this.win.webContents.send(TAB_MENU_CLOSED);
+    this.sendToSidebar(TAB_MENU_CLOSED);
     const overlay = this.lazyOverlays.tabMenu.existing;
     if (!overlay) return;
     overlay.webContents.send('tab-menu:close');
@@ -528,7 +538,7 @@ class ViewManager {
     this.raiseOverlays();
     // Lets the sidebar close this on the next click elsewhere regardless of
     // which trigger opened it — see GROUP_MENU_OPENED's own comment.
-    this.win.webContents.send(GROUP_MENU_OPENED);
+    this.sendToSidebar(GROUP_MENU_OPENED);
   }
 
   closeGroupMenu() {
@@ -545,13 +555,13 @@ class ViewManager {
   groupMenuSetColor(color) {
     if (!this.groupMenuContext) return;
     configStore.setGroupColor(this.groupMenuContext, color);
-    this.win.webContents.send(APPS_CHANGED);
+    this.sendToSidebar(APPS_CHANGED);
   }
 
   groupMenuSetLabel(label) {
     if (!this.groupMenuContext) return;
     configStore.setGroupLabel(this.groupMenuContext, label);
-    this.win.webContents.send(APPS_CHANGED);
+    this.sendToSidebar(APPS_CHANGED);
   }
 
   // Builds the { key, label, state } list both the per-app popover and the
@@ -591,7 +601,7 @@ class ViewManager {
       permissions: this.permissionRowsForApp(app),
     });
     this.raiseOverlays();
-    this.win.webContents.send(PERMISSION_MENU_OPENED);
+    this.sendToSidebar(PERMISSION_MENU_OPENED);
   }
 
   closePermissionMenu() {
@@ -807,7 +817,7 @@ class ViewManager {
     this.warmUp([newApp]);
     this.closeTab(target.appId, target.tabId);
     this.show(newApp.id, newApp);
-    this.win.webContents.send(APPS_CHANGED);
+    this.sendToSidebar(APPS_CHANGED);
   }
 
   // Swaps a tab and the app's primary view: the tab's page becomes what
@@ -1324,9 +1334,10 @@ class ViewManager {
   }
 
   emitNavStateForFocused() {
-    if (!this.focusedView) return;
-    const { navigationHistory } = this.focusedView.webContents;
-    this.win.webContents.send(NAV_STATE_CHANGED, {
+    const contents = this.focusedView?.webContents;
+    if (!contents || contents.isDestroyed()) return;
+    const { navigationHistory } = contents;
+    this.sendToSidebar(NAV_STATE_CHANGED, {
       canGoBack: navigationHistory.canGoBack(),
       canGoForward: navigationHistory.canGoForward(),
     });
@@ -1365,7 +1376,7 @@ class ViewManager {
     const current = this.meta.get(appId) || {};
     const next = { ...current, ...partial };
     this.meta.set(appId, next);
-    this.win.webContents.send(APP_META_CHANGED, { appId, ...next });
+    this.sendToSidebar(APP_META_CHANGED, { appId, ...next });
     // Persisted so next launch can show it immediately instead of a
     // fallback letter while this app's page reloads over the network.
     configStore.updateAppMeta(appId, partial);
@@ -1381,7 +1392,7 @@ class ViewManager {
 
   updateUnread(appId, count) {
     this.unread.set(appId, count);
-    this.win.webContents.send(UNREAD_CHANGED, { appId, count });
+    this.sendToSidebar(UNREAD_CHANGED, { appId, count });
   }
 
   getUnreadCount(appId) {
@@ -1394,7 +1405,7 @@ class ViewManager {
   }
 
   emitTabsChanged(appId) {
-    this.win.webContents.send(TABS_CHANGED, { appId, tabs: configStore.getTabs(appId) });
+    this.sendToSidebar(TABS_CHANGED, { appId, tabs: configStore.getTabs(appId) });
   }
 
   reorderTabs(appId, tabIds) {
@@ -1403,7 +1414,7 @@ class ViewManager {
   }
 
   emitActiveChanged() {
-    this.win.webContents.send(ACTIVE_VIEW_CHANGED, {
+    this.sendToSidebar(ACTIVE_VIEW_CHANGED, {
       appId: this.activeId,
       tabId: this.activeId ? this.activeTabByApp.get(this.activeId) ?? null : null,
     });
@@ -1662,6 +1673,7 @@ class ViewManager {
   // forward (it may be minimized or behind other windows) and switch to
   // that app's primary view, where the notification came from.
   focusFromNotification(appId) {
+    if (this.win.isDestroyed()) return;
     if (this.win.isMinimized()) this.win.restore();
     this.win.show();
     this.win.focus();
