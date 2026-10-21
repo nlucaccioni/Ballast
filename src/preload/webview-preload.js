@@ -101,7 +101,26 @@ contextBridge.executeInMainWorld({
   args: [appLabel, persistentNotifications],
 });
 
-// One targeted exception to "don't touch navigator": Google's login page
+// Ctrl+F (Cmd+F on macOS) and F3 open Ballast's find bar (see
+// view-manager.js's openFindBar) — unless the page handles the key itself,
+// the way Google Docs/Sheets open their own find, which is also when a
+// browser leaves it to the page. That's only known once the key has been
+// through the page's own listeners (their preventDefault() is the signal),
+// hence checking after dispatch rather than here.
+window.addEventListener(
+  'keydown',
+  (e) => {
+    const modifier = process.platform === 'darwin' ? e.metaKey : e.ctrlKey;
+    const isFind = modifier && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f';
+    if (!isFind && e.key !== 'F3') return;
+    setTimeout(() => {
+      if (!e.defaultPrevented) ipcRenderer.send('app:find-shortcut', { next: e.key === 'F3', forward: !e.shiftKey });
+    });
+  },
+  true
+);
+
+// One targeted exception to "don't touch navigator":Google's login page
 // (and others) probes for a platform passkey authenticator the moment it
 // loads, via WebAuthn's *conditional* mediation (silent autofill-style
 // discovery, no user action) — and Electron appears to escalate that

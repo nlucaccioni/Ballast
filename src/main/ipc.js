@@ -246,6 +246,10 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
   );
   ipcMain.on('hibernation-page:close', () => viewManager.closeHibernationPage());
 
+  // Same deal for the find bar's own preload (find-bar-preload.js).
+  ipcMain.on('find-bar:find', (event, { text, forward }) => viewManager.findInPage(String(text || ''), forward !== false));
+  ipcMain.on('find-bar:close', () => viewManager.closeFindBar());
+
   // GET_THEME is handled synchronously in main/index.js itself (ipcMain.on
   // + event.returnValue), not here — see its own comment for why.
 

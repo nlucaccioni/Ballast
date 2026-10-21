@@ -76,6 +76,11 @@ const GROUP_MENU_LABEL_HEIGHT = 30;
 const GROUP_MENU_SWATCH_ROW_HEIGHT = 28;
 const GROUP_MENU_HEIGHT =
   GROUP_MENU_PADDING * 2 + GROUP_MENU_LABEL_HEIGHT + GROUP_MENU_GAP + GROUP_MENU_SWATCH_ROW_HEIGHT;
+// The find bar (find-bar/index.html) sits in the page's top-right corner,
+// like a browser's: 6px padding around a 28px-tall row, plus its border.
+const FIND_BAR_WIDTH = 340;
+const FIND_BAR_HEIGHT = 42;
+const FIND_BAR_MARGIN = 12;
 
 // Same no-native-autosize situation, for the per-app site-permissions
 // popover — must match permission-menu/index.html's own padding/gap/row
@@ -259,6 +264,7 @@ class ViewManager {
       if (this.focusedView) this.layout(this.focusedView);
       this.layoutPermissionsPage();
       this.layoutHibernationPage();
+      this.layoutFindBar();
     });
 
     // Sweeps for idle, hibernation-eligible views on a fixed cadence — see
@@ -346,12 +352,29 @@ class ViewManager {
       // centering/backdrop, so they only ever need the whole content area.
       permissionsPage: new LazyOverlay(this.win, { name: 'permissions-page', onCreate: (view) => this.sendThemeTo(view) }),
       hibernationPage: new LazyOverlay(this.win, { name: 'hibernation-page', onCreate: (view) => this.sendThemeTo(view) }),
+      findBar: new LazyOverlay(this.win, {
+        name: 'find-bar',
+        onCreate: (view) => {
+          this.sendThemeTo(view);
+          // Same as the tab menu: focus given while it's still loading
+          // doesn't stick.
+          view.webContents.once('did-finish-load', () => {
+            if (this.findView) view.webContents.focus();
+          });
+        },
+      }),
     };
     this.tabMenuContext = null; // { appId, tabId } while open, else null
     this.groupMenuContext = null; // groupId while open, else null
     this.permissionMenuContext = null; // appId while open, else null
     this.permissionsPageOpen = false;
     this.hibernationPageOpen = false;
+    this.findView = null; // the view the find bar is searching while open, else null
+    this.findText = ''; // last query, offered again the next time the bar opens
+    this.findSessionText = null; // query of the search in progress — see findInPage
+
+    // Ctrl+F from the sidebar too, not just from inside a page.
+    this.attachFindShortcut(this.win.webContents);
   }
 
   get tabMenuOverlay() {
@@ -372,6 +395,10 @@ class ViewManager {
 
   get hibernationPageOverlay() {
     return this.lazyOverlays.hibernationPage.view;
+  }
+
+  get findBarOverlay() {
+    return this.lazyOverlays.findBar.view;
   }
 
   // Only the lazy overlays currently loaded — see LazyOverlay.
@@ -792,6 +819,116 @@ class ViewManager {
   // and the plain right-click context menu (which acts on a specific
   // chip directly, without requiring the overlay to be open or switching
   // focus to it first — see sidebar index.js's handleChipContextMenu).
+  // --- Find in page (Ctrl+F) ---
+  //
+  // The bar is its own overlay rather than part of the page, so the search
+  // never matches the bar's own text and pages can't restyle or hide it.
+
+  // Pinned apps and tabs send their shortcut from webview-preload.js (which
+  // leaves it to pages that handle Ctrl+F themselves); the sidebar has no
+  // such page, so its keys are caught here directly.
+  attachFindShortcut(contents) {
+    contents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown') return;
+      const modifier = process.platform === 'darwin' ? input.meta : input.control;
+      const isFind = modifier && !input.alt && !input.shift && input.key.toLowerCase() === 'f';
+      if (!isFind && input.key !== 'F3') return;
+      event.preventDefault();
+      this.onFindShortcut({ next: input.key === 'F3', forward: !input.shift });
+    });
+  }
+
+  // Per-view half of the above, plus keeping the bar's match count current.
+  attachFindInPage(view) {
+    view.webContents.ipc.on('app:find-shortcut', (event, shortcut) => {
+      if (view === this.focusedView) this.onFindShortcut(shortcut);
+    });
+    view.webContents.on('found-in-page', (event, result) => {
+      if (view !== this.findView || !result.finalUpdate) return;
+      this.lazyOverlays.findBar.existing?.webContents.send('find-bar:result', {
+        activeMatchOrdinal: result.activeMatchOrdinal,
+        matches: result.matches,
+      });
+    });
+    // A new page is a new document to search — the next Enter starts over.
+    view.webContents.on('did-navigate', () => {
+      if (view === this.findView) this.findSessionText = null;
+    });
+  }
+
+  // F3 steps through matches while the bar is open, and opens it otherwise
+  // (as Ctrl+F always does), like a browser.
+  onFindShortcut({ next, forward }) {
+    if (next && this.findView && this.findText) this.findInPage(this.findText, forward);
+    else this.openFindBar();
+  }
+
+  openFindBar() {
+    const view = this.focusedView;
+    if (!view || view.webContents.isDestroyed()) return;
+    const alreadyOpen = this.findView === view;
+    if (this.findView && !alreadyOpen) this.stopFind();
+    this.findView = view;
+    this.layoutFindBar();
+    this.findBarOverlay.webContents.focus();
+    // Reopening offers the last query again and re-runs it; Ctrl+F while
+    // already open only puts the cursor back in the field.
+    this.findBarOverlay.webContents.send('find-bar:open', { text: this.findText, alreadyOpen });
+    this.raiseOverlays();
+  }
+
+  layoutFindBar() {
+    if (!this.findView) return;
+    const [width] = this.win.getContentSize();
+    this.findBarOverlay.setBounds({
+      x: width - FIND_BAR_WIDTH - FIND_BAR_MARGIN,
+      y: TITLEBAR_HEIGHT + BORDER_WIDTH + FIND_BAR_MARGIN,
+      width: FIND_BAR_WIDTH,
+      height: FIND_BAR_HEIGHT,
+    });
+  }
+
+  // A changed query starts a new search from the top; the same query again
+  // (Enter, the arrows, F3) moves to the next/previous match of it.
+  findInPage(text, forward) {
+    const contents = this.findView?.webContents;
+    if (!contents || contents.isDestroyed()) return;
+    this.findText = text;
+    if (!text) {
+      contents.stopFindInPage('clearSelection');
+      this.findSessionText = null;
+      return;
+    }
+    const isNewSearch = text !== this.findSessionText;
+    this.findSessionText = text;
+    contents.findInPage(text, { forward, findNext: isNewSearch });
+  }
+
+  stopFind() {
+    const contents = this.findView?.webContents;
+    // Keeps the match that was current selected, like a browser does.
+    if (contents && !contents.isDestroyed()) contents.stopFindInPage('keepSelection');
+    this.findView = null;
+    this.findSessionText = null;
+  }
+
+  // refocus hands typing back to the page that was searched — wanted when
+  // the user closes the bar, not when it closes because they switched away.
+  closeFindBar({ refocus = true } = {}) {
+    if (!this.findView) return;
+    const searched = this.findView;
+    this.stopFind();
+    const overlay = this.lazyOverlays.findBar.existing;
+    if (overlay) {
+      overlay.webContents.send('find-bar:close');
+      overlay.setBounds({ x: -10000, y: -10000, width: FIND_BAR_WIDTH, height: FIND_BAR_HEIGHT });
+      this.lazyOverlays.findBar.scheduleTeardown();
+    }
+    if (refocus && searched === this.focusedView && !searched.webContents.isDestroyed()) {
+      searched.webContents.focus();
+    }
+  }
+
   resolveTarget(appId, tabId) {
     const view = tabId === null ? this.views.get(appId) : this.tabViews.get(tabId);
     if (!view) return null;
@@ -1183,6 +1320,7 @@ class ViewManager {
 
     this.attachWindowOpenHandler(view, app.id);
     this.attachContextMenu(view, app.id);
+    this.attachFindInPage(view);
 
     view.webContents.on('page-favicon-updated', (event, favicons) => {
       this.updateMeta(app.id, { faviconUrl: favicons[0] || null });
@@ -1276,6 +1414,7 @@ class ViewManager {
     this.attachWindowOpenHandler(view, appId);
     this.attachContextMenu(view, appId);
     this.attachNotificationIpc(view, appId);
+    this.attachFindInPage(view);
 
     view.webContents.on('page-favicon-updated', (event, favicons) => {
       this.updateTabMeta(appId, tab.id, { faviconUrl: favicons[0] || null });
@@ -1507,6 +1646,7 @@ class ViewManager {
   // mistaken for the page closing itself.
   releaseView(view) {
     if (!view) return;
+    if (view === this.findView) this.closeFindBar({ refocus: false });
     if (!this.win.isDestroyed()) this.win.contentView.removeChildView(view);
     if (!view.webContents.isDestroyed()) view.webContents.close();
   }
@@ -1521,6 +1661,8 @@ class ViewManager {
       // Anchored to a specific tab's chip — stale once focus moves anywhere
       // else, including a tabMenu action itself already having closed it.
       this.closeTabMenu();
+      // Was searching the page being switched away from.
+      this.closeFindBar({ refocus: false });
     }
     if (this.focusedView && this.focusedView !== view) {
       this.win.contentView.removeChildView(this.focusedView);
@@ -1724,6 +1866,7 @@ class ViewManager {
   // page, so full-window sidebar UI (dialogs, etc.) needs the active view
   // detached first or it'll be covered everywhere but the sidebar strip.
   hideActive() {
+    this.closeFindBar({ refocus: false });
     if (this.focusedView) this.win.contentView.removeChildView(this.focusedView);
   }
 
