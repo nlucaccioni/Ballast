@@ -438,6 +438,13 @@ function removeApp(appId) {
 // intent (see ViewManager) but the *list* (url/title/favicon, not the
 // live view) is persisted so the tab strip can restore instantly on
 // relaunch without eagerly loading every tab's page.
+//
+// A tab can also carry a user-chosen name (customTitle), shown in place of
+// the page's own title — e.g. "Desk lamp" for a carrier's identical-looking
+// "Track your package" page. customTitleSite records which site the tab was
+// on when named, and customTitleStale whether it has since navigated to a
+// different one (see ViewManager.updateTabMeta), so the sidebar can show
+// that the name may no longer fit.
 function generateTabId() {
   return `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }

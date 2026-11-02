@@ -11,7 +11,7 @@ const {
   permissionStates,
   setAppPermissionState,
 } = require('./session-manager');
-const { rootDomain, looksLikeAuthFlow } = require('./url-utils');
+const { rootDomain, siteOf, looksLikeAuthFlow } = require('./url-utils');
 const { watchTitleCount, watchAppBadge } = require('./unread-tracker');
 const configStore = require('./config-store');
 const { LazyOverlay } = require('./lazy-overlay');
@@ -25,6 +25,7 @@ const {
   GROUP_MENU_OPENED,
   PERMISSION_MENU_OPENED,
   TAB_MENU_CLOSED,
+  START_TAB_RENAME,
 } = require('../renderer/shared/ipc-channels');
 
 const SIDEBAR_WIDTH = 54; // adjust to final design; must match --sidebar-width in sidebar/styles.css
@@ -443,14 +444,20 @@ class ViewManager {
     this.loadedLazyOverlays().forEach((view) => this.win.contentView.addChildView(view));
   }
 
-  showTooltip(title, label, x, y) {
+  // placement 'right' (the sidebar's app icons): (x, y) is the point just
+  // right of the trigger, vertically centered on it. 'below' (tab chips,
+  // which sit side by side in a row): (x, y) is the trigger's bottom-left
+  // corner, clamped so the tooltip can't run off the window's right edge.
+  showTooltip(title, label, x, y, placement = 'right') {
     const height = label ? TOOLTIP_HEIGHT_WITH_LABEL : TOOLTIP_HEIGHT;
-    this.tooltipOverlay.setBounds({
-      x: Math.round(x),
-      y: Math.round(y - height / 2),
-      width: TOOLTIP_WIDTH,
-      height,
-    });
+    let bounds;
+    if (placement === 'below') {
+      const [contentWidth] = this.win.getContentSize();
+      bounds = { x: Math.max(8, Math.min(Math.round(x), contentWidth - TOOLTIP_WIDTH - 8)), y: Math.round(y) + 4 };
+    } else {
+      bounds = { x: Math.round(x), y: Math.round(y - height / 2) };
+    }
+    this.tooltipOverlay.setBounds({ ...bounds, width: TOOLTIP_WIDTH, height });
     this.tooltipOverlay.webContents.send('tooltip:update', { title, label, visible: true });
     this.raiseOverlays();
   }
@@ -1539,7 +1546,59 @@ class ViewManager {
   }
 
   updateTabMeta(appId, tabId, partial) {
+    // A named tab is "stale" while it's on a different site from the one it
+    // was named on. Recomputed on every navigation rather than set once, so
+    // a detour through a sign-in page on another domain clears itself again
+    // on the way back. Compared by root domain, not full URL — tracking
+    // pages reload with fresh query params and bounce between www./track.
+    // subdomains constantly, none of which means the name stopped fitting.
+    if (partial.url) {
+      const tab = configStore.getTabs(appId).find((t) => t.id === tabId);
+      if (tab?.customTitle) {
+        const site = siteOf(partial.url);
+        partial = { ...partial, customTitleStale: !!(tab.customTitleSite && site && site !== tab.customTitleSite) };
+      }
+    }
     configStore.updateTab(appId, tabId, partial);
+    this.emitTabsChanged(appId);
+  }
+
+  // Right-click "Rename tab..." or double-clicking a chip — the editing
+  // itself happens inline in the sidebar, which then commits via renameTab.
+  // The sidebar needs real OS keyboard focus to be typed into, which the
+  // native context menu (or the tab menu overlay a first click may have
+  // opened) doesn't hand back on its own.
+  startTabRename(appId, tabId) {
+    if (!configStore.getTabs(appId).some((t) => t.id === tabId)) return;
+    this.closeTabMenu();
+    this.win.webContents.focus();
+    this.sendToSidebar(START_TAB_RENAME, { appId, tabId });
+  }
+
+  renameTab(appId, tabId, name) {
+    const tab = configStore.getTabs(appId).find((t) => t.id === tabId);
+    if (!tab) return;
+    const trimmed = String(name || '').trim();
+    if (!trimmed) {
+      this.resetTabName(appId, tabId);
+      return;
+    }
+    configStore.updateTab(appId, tabId, { customTitle: trimmed, customTitleSite: siteOf(tab.url), customTitleStale: false });
+    this.emitTabsChanged(appId);
+  }
+
+  resetTabName(appId, tabId) {
+    configStore.updateTab(appId, tabId, { customTitle: null, customTitleSite: null, customTitleStale: false });
+    this.emitTabsChanged(appId);
+  }
+
+  // "Keep name here": the name still fits after moving sites (a carrier
+  // handing a package off to another, say), so the current site becomes
+  // the one it's compared against from now on.
+  keepTabNameHere(appId, tabId) {
+    const tab = configStore.getTabs(appId).find((t) => t.id === tabId);
+    if (!tab?.customTitle) return;
+    configStore.updateTab(appId, tabId, { customTitleSite: siteOf(tab.url), customTitleStale: false });
     this.emitTabsChanged(appId);
   }
 

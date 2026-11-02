@@ -30,6 +30,9 @@ module.exports = {
   SWITCH_TAB: 'tabs:switch', // renderer -> main; tabId null means the app's own primary view
   CLOSE_TAB: 'tabs:close', // renderer -> main
   REORDER_TABS: 'tabs:reorder', // renderer -> main, drag-to-reorder the secondary tabs
+  RENAME_TAB: 'tabs:rename', // renderer -> main, commit a tab's custom name (empty resets it)
+  REQUEST_TAB_RENAME: 'tabs:request-rename', // renderer -> main, double-clicking a chip
+  START_TAB_RENAME: 'tabs:start-rename', // main -> renderer push; turn that chip's title into an editable field
   TABS_CHANGED: 'tabs:changed', // main -> renderer push (a tab opened/closed, or one's title/favicon updated)
   ACTIVE_VIEW_CHANGED: 'view:active-changed', // main -> renderer push, e.g. a link click opened a new tab
   OPEN_TAB_MENU: 'tab-menu:show', // sidebar -> main, clicking an already-active tab chip

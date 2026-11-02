@@ -74,7 +74,9 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
   ipcMain.on(channels.HIDE_ACTIVE_VIEW, () => viewManager.hideActive());
   ipcMain.on(channels.SHOW_ACTIVE_VIEW, () => viewManager.showActive());
 
-  ipcMain.on(channels.SHOW_TOOLTIP, (event, { title, label, x, y }) => viewManager.showTooltip(title, label, x, y));
+  ipcMain.on(channels.SHOW_TOOLTIP, (event, { title, label, x, y, placement }) =>
+    viewManager.showTooltip(title, label, x, y, placement)
+  );
   ipcMain.on(channels.HIDE_TOOLTIP, () => viewManager.hideTooltip());
 
   ipcMain.on(channels.OPEN_APP_MENU, (event, position) => {
@@ -176,6 +178,13 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
     return {};
   });
 
+  ipcMain.handle(channels.RENAME_TAB, (event, { appId, tabId, name }) => {
+    viewManager.renameTab(appId, tabId, name);
+    return {};
+  });
+
+  ipcMain.on(channels.REQUEST_TAB_RENAME, (event, { appId, tabId }) => viewManager.startTabRename(appId, tabId));
+
   ipcMain.on(channels.OPEN_TAB_MENU, (event, { appId, tabId, x, y }) => viewManager.openTabMenu(appId, tabId, x, y));
   ipcMain.on(channels.OPEN_NEW_TAB_MENU, (event, { appId, x, y }) => viewManager.openNewTabMenu(appId, x, y));
   ipcMain.on(channels.CLOSE_TAB_MENU, () => viewManager.closeTabMenu());
@@ -185,7 +194,21 @@ function registerIpcHandlers(viewManager, mainWindow, appMenu) {
   // live view to show its current address).
   ipcMain.on(channels.OPEN_TAB_CONTEXT_MENU, (event, { appId, tabId, x, y }) => {
     const isPrimary = !tabId;
+    // Naming only applies to secondary tabs — the primary chip *is* the
+    // app, and shows the app's own title.
+    const tab = isPrimary ? null : configStore.getTabs(appId).find((t) => t.id === tabId);
+    const nameItems = tab
+      ? [
+          { label: 'Rename tab...', click: () => viewManager.startTabRename(appId, tabId) },
+          ...(tab.customTitle ? [{ label: 'Reset name', click: () => viewManager.resetTabName(appId, tabId) }] : []),
+          ...(tab.customTitleStale
+            ? [{ label: 'Keep name here', click: () => viewManager.keepTabNameHere(appId, tabId) }]
+            : []),
+          { type: 'separator' },
+        ]
+      : [];
     const contextMenu = Menu.buildFromTemplate([
+      ...nameItems,
       { label: 'Duplicate tab', click: () => viewManager.duplicateTab(appId, tabId) },
       ...(isPrimary
         ? []

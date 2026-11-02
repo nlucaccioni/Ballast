@@ -280,6 +280,27 @@ body.platform-darwin #tab-strip {
   -webkit-app-region: no-drag;
 }
 
+/* A custom name whose tab has since moved to a different site — still
+   shown, just quieter, with the tooltip saying where it was named. */
+.tab-chip-stale .tab-chip-title {
+  font-style: italic;
+  opacity: 0.6;
+}
+
+.tab-chip .tab-chip-rename {
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 18px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 3px;
+  outline: 1px solid #5b8def;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  -webkit-app-region: no-drag;
+}
+
 .tab-chip .tab-chip-close {
   flex-shrink: 0;
   width: 14px;

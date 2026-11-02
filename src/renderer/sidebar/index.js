@@ -111,11 +111,16 @@ let tooltipTimer = null;
 // content is { title, label? } — label (a group name) renders as its own
 // line above the title rather than appended onto it, so a long title's own
 // truncation can't push the label off the end (see tooltip-overlay for the
-// two-line layout).
-function showTooltip(button, content) {
+// two-line layout). placement 'below' is for tab chips, which sit side by
+// side in a row where 'right' would cover the next chip over.
+function showTooltip(button, content, placement = 'right') {
   if (!content?.title) return;
   const rect = button.getBoundingClientRect();
-  window.electronAPI.showTooltip(content, rect.right + 8, rect.top + rect.height / 2);
+  if (placement === 'below') {
+    window.electronAPI.showTooltip(content, rect.left, rect.bottom, 'below');
+  } else {
+    window.electronAPI.showTooltip(content, rect.right + 8, rect.top + rect.height / 2);
+  }
 }
 
 function hideTooltip() {
@@ -123,10 +128,10 @@ function hideTooltip() {
   window.electronAPI.hideTooltip();
 }
 
-function attachTooltip(button, getContent) {
+function attachTooltip(button, getContent, placement) {
   button.addEventListener('mouseenter', () => {
     clearTimeout(tooltipTimer);
-    tooltipTimer = setTimeout(() => showTooltip(button, getContent()), TOOLTIP_DELAY_MS);
+    tooltipTimer = setTimeout(() => showTooltip(button, getContent(), placement), TOOLTIP_DELAY_MS);
   });
   button.addEventListener('mouseleave', hideTooltip);
   button.addEventListener('mousedown', hideTooltip);
@@ -439,11 +444,94 @@ function attachTabDragHandlers(chip, tab) {
   });
 }
 
+// --- Tab naming: a user-chosen name shown in place of a tab's page title
+// (see config-store.js's tab comment). Edited inline, in place of the
+// chip's title, via one long-lived input that renderTabStrip re-inserts on
+// every rebuild — tabs:changed fires on every title/favicon/URL update of
+// *any* tab, so a field rebuilt from scratch each time would lose whatever
+// was being typed into it.
+let renaming = null; // { appId, tabId, initialValue } while a name field is open
+let renameInputDetaching = false;
+const renameInput = document.createElement('input');
+renameInput.className = 'tab-chip-rename';
+renameInput.type = 'text';
+renameInput.autocomplete = 'off';
+renameInput.spellcheck = false;
+renameInput.maxLength = 100;
+
+function startTabRename(tabId) {
+  const tab = appsById.get(activeAppId)?.tabs?.find((t) => t.id === tabId);
+  if (!tab) return;
+  hideTooltip();
+  const initialValue = tab.customTitle || tab.title || tab.url;
+  renaming = { appId: activeAppId, tabId, initialValue };
+  renameInput.value = initialValue;
+  renderTabStrip();
+  renameInput.focus();
+  renameInput.select();
+}
+
+function finishTabRename(commit) {
+  if (!renaming) return;
+  const { appId, tabId, initialValue } = renaming;
+  renaming = null;
+  // Committing the untouched starting text would freeze the page's own
+  // live title in place as a custom name — treat it as no change instead.
+  // An empty name is passed through: main treats that as "reset".
+  if (commit && renameInput.value.trim() !== initialValue) {
+    window.electronAPI.renameTab(appId, tabId, renameInput.value);
+  }
+  if (appId === activeAppId) renderTabStrip();
+}
+
+renameInput.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Enter') finishTabRename(true);
+  else if (e.key === 'Escape') finishTabRename(false);
+});
+renameInput.addEventListener('blur', () => {
+  if (!renameInputDetaching) finishTabRename(true);
+});
+// Keeps clicks inside the field (placing the caret, selecting text) from
+// reaching the chip's own click/double-click handlers underneath it.
+['mousedown', 'click', 'dblclick'].forEach((type) => renameInput.addEventListener(type, (e) => e.stopPropagation()));
+
+window.electronAPI.onStartTabRename(({ appId, tabId }) => {
+  if (appId === activeAppId) startTabRename(tabId);
+});
+
+function siteLabel(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
+
+function tabNameTooltip(tab) {
+  const label = tab.customTitleStale
+    ? `Named on ${tab.customTitleSite}, now on ${siteLabel(tab.url)}`
+    : tab.title || tab.url;
+  return { title: tab.customTitle, label };
+}
+
 function renderTabStrip() {
+  // A rebuild swaps out the chip under the cursor without a mouseleave on
+  // the old one, which would leave its tooltip stuck on screen.
+  if (tabStripEl.matches(':hover')) hideTooltip();
+
+  // Detaching the focused name field below would otherwise blur (and so
+  // commit) it mid-edit.
+  const wasEditing = renaming && document.activeElement === renameInput;
+  const { selectionStart, selectionEnd } = renameInput;
+  renameInputDetaching = true;
   tabStripEl.replaceChildren();
+  renameInputDetaching = false;
+
   if (!activeAppId) return;
   const app = appsById.get(activeAppId);
   const tabs = app?.tabs || [];
+  if (renaming && (renaming.appId !== activeAppId || !tabs.some((t) => t.id === renaming.tabId))) renaming = null;
 
   tabStripEl.appendChild(
     buildTabChip({
@@ -463,10 +551,16 @@ function renderTabStrip() {
 
   tabs.forEach((tab) => {
     const chip = buildTabChip({
-      label: tab.title || tab.url,
+      label: tab.customTitle || tab.title || tab.url,
       faviconUrl: tab.faviconUrl,
       isActive: activeTabId === tab.id,
-      onSelect: (e) => handleChipClick(tab.id, e.currentTarget, activeTabId === tab.id),
+      onSelect: (e) => {
+        // Space typed into the name field still activates the <button> chip
+        // around it — a click the field's own listeners never see, since
+        // it's dispatched on the chip itself, not the field.
+        if (renaming?.tabId === tab.id) return;
+        handleChipClick(tab.id, e.currentTarget, activeTabId === tab.id);
+      },
       onContextMenu: (e) => handleChipContextMenu(tab.id, e),
       onClose: () => window.electronAPI.closeTab(activeAppId, tab.id),
     });
@@ -475,8 +569,24 @@ function renderTabStrip() {
     // to secondary tabs.
     chip.classList.add('tab-chip-secondary');
     attachTabDragHandlers(chip, tab);
+    chip.addEventListener('dblclick', () => {
+      if (renaming?.tabId !== tab.id) window.electronAPI.requestTabRename(activeAppId, tab.id);
+    });
+    if (tab.customTitle) {
+      if (tab.customTitleStale) chip.classList.add('tab-chip-stale');
+      attachTooltip(chip, () => tabNameTooltip(tab), 'below');
+    }
+    if (renaming?.tabId === tab.id) {
+      chip.draggable = false; // or dragging to select text in the field drags the whole chip instead
+      chip.querySelector('.tab-chip-title').replaceWith(renameInput);
+    }
     tabStripEl.appendChild(chip);
   });
+
+  if (wasEditing && renaming) {
+    renameInput.focus();
+    renameInput.setSelectionRange(selectionStart, selectionEnd);
+  }
 
   tabStripEl.appendChild(newTabButton);
   tabStripEl.appendChild(tabStripDragSpacer);

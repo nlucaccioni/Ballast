@@ -23,4 +23,16 @@ function looksLikeAuthFlow(parsedUrl) {
   return false;
 }
 
-module.exports = { rootDomain, AUTH_SUBDOMAIN_PATTERN, looksLikeAuthFlow };
+// The root domain a URL belongs to, or null for anything that isn't a
+// regular web page (about:blank, view-source:, a malformed string, ...).
+function siteOf(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return rootDomain(parsed.hostname);
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { rootDomain, siteOf, AUTH_SUBDOMAIN_PATTERN, looksLikeAuthFlow };

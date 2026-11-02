@@ -26,7 +26,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   hideActiveView: () => ipcRenderer.send('view:hide-active'),
   showActiveView: () => ipcRenderer.send('view:show-active'),
-  showTooltip: (content, x, y) => ipcRenderer.send('view:show-tooltip', { title: content.title, label: content.label, x, y }),
+  showTooltip: (content, x, y, placement) =>
+    ipcRenderer.send('view:show-tooltip', { title: content.title, label: content.label, x, y, placement }),
   hideTooltip: () => ipcRenderer.send('view:hide-tooltip'),
   openAppMenu: (position) => ipcRenderer.send('app:open-menu', position),
   openAppContextMenu: (appId, position, inGroup) =>
@@ -66,6 +67,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   switchTab: (appId, tabId) => ipcRenderer.invoke('tabs:switch', { appId, tabId }),
   closeTab: (appId, tabId) => ipcRenderer.invoke('tabs:close', { appId, tabId }),
   reorderTabs: (appId, tabIds) => ipcRenderer.invoke('tabs:reorder', { appId, tabIds }),
+  renameTab: (appId, tabId, name) => ipcRenderer.invoke('tabs:rename', { appId, tabId, name }),
+  requestTabRename: (appId, tabId) => ipcRenderer.send('tabs:request-rename', { appId, tabId }),
+  onStartTabRename: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('tabs:start-rename', listener);
+    return () => ipcRenderer.removeListener('tabs:start-rename', listener);
+  },
   onTabsChanged: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('tabs:changed', listener);
