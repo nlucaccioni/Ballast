@@ -8,6 +8,10 @@ and memory-hibernation controls, and light/dark theming.
 
 Built with Electron.
 
+![Ballast with pinned apps in the sidebar, two colour-coded groups, and several open tabs across the top, including one renamed "Read later"](assets/screenshots/main.png)
+
+![Switching between pinned apps in the sidebar, then renaming a tab to "Weekend reading"](assets/screenshots/demo.gif)
+
 ## Download
 
 Grab the latest installer for your platform from the
@@ -49,10 +53,23 @@ icon onto another to group them into a single sidebar slot — right-click a
 group to give it a custom name and color, or right-click an app to remove
 it from its group or the sidebar entirely.
 
+<img src="assets/screenshots/groups.png" width="358" alt="Two colour-coded app groups in the sidebar, with the colour and name picker open for the blue Reference group">
+
 ## More features
 
 Browser-style tabs, per-app mute controls, memory hibernation for idle
 apps, site permissions, light/dark/system theming, and auto-updates.
+
+**Tabs you can rename.** Links opened from an app become tabs along the top.
+Right-click a tab (or double-click it) to give it your own name. A renamed
+tab that has since moved to a different site is shown faded, so you can tell
+the name may no longer fit.
+
+<img src="assets/screenshots/tabs.png" width="865" alt="Tab strip with a tab renamed &quot;Read later&quot; and a faded, italic tab named &quot;Boat project&quot; that has moved to another site">
+
+**Find in page.** Press Ctrl+F (Cmd+F on Mac) to search the current page.
+
+![The find bar open in the top-right corner, with every match for "ballast" highlighted on the page](assets/screenshots/find.png)
 
 ## Project layout
 
