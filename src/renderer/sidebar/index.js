@@ -500,18 +500,19 @@ window.electronAPI.onStartTabRename(({ appId, tabId }) => {
   if (appId === activeAppId) startTabRename(tabId);
 });
 
+// Root domain only, the same comparison main uses to decide a name is stale
+// (url-utils.js's rootDomain) — and short enough that the tooltip's one
+// truncating label line doesn't cut it off for typical subdomains.
 function siteLabel(url) {
   try {
-    return new URL(url).hostname.replace(/^www\./, '');
+    return new URL(url).hostname.split('.').slice(-2).join('.');
   } catch {
     return url;
   }
 }
 
 function tabNameTooltip(tab) {
-  const label = tab.customTitleStale
-    ? `Named on ${tab.customTitleSite}, now on ${siteLabel(tab.url)}`
-    : tab.title || tab.url;
+  const label = tab.customTitleStale ? `Moved to ${siteLabel(tab.url)}` : tab.title || tab.url;
   return { title: tab.customTitle, label };
 }
 
